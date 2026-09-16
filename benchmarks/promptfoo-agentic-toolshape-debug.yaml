@@ -1,0 +1,79 @@
+# Debug config — retests qwen2.5-coder:14b's ONE remaining verified weakness
+# from the agentic suite (Sept 13): on 2 of 3 single-tool-call tests it
+# emitted a non-schema-conforming argument shape — a nested {city, state}
+# object instead of the schema's plain "City, State" string for `location`.
+# (The coding-suite concern for this model was separately retracted — a
+# judge false-negative, not a real defect — so this argument-shape issue is
+# the only open item being retested here. See Benchmark Log / Project
+# Instructions §9.)
+#
+# This tests the CHEAPEST fix option first: an explicit system-prompt
+# reminder of the exact expected argument shape, before trying a different
+# quantization or an Unsloth Dynamic (UD) variant that keeps tool-calling
+# layers at higher precision (per Project Instructions §4's quantization
+# notes). Each of the two original failing prompts is run twice — once as
+# baseline (no reminder, should reproduce the original failure) and once
+# with the reminder — so a single run gives a direct before/after.
+#
+# Run: npx promptfoo@latest eval -c promptfoo-agentic-toolshape-debug.yaml --output toolshape-debug-result.json
+# Then open toolshape-debug-result.json and inspect each result's actual
+# tool_calls arguments directly — don't just trust the is-valid-openai-tools-
+# call pass/fail badge, confirm by eye that `location` came back as a plain
+# string in the "with reminder" cases and (presumably) as a nested object in
+# the baseline cases, matching the original Sept 13 failure.
+
+description: "DEBUG: qwen2.5-coder:14b tool-call argument-shape retest (baseline vs. explicit schema reminder)"
+
+x-weather-tool: &weather_tool
+  type: function
+  function:
+    name: get_weather
+    description: Get current weather for a location
+    parameters:
+      type: object
+      properties:
+        location: { type: string, description: "City, State" }
+      required: [location]
+
+providers:
+  - id: ollama:chat:qwen2.5-coder:14b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+
+prompts:
+  - "{{input}}"
+
+tests:
+  - vars:
+      input: "What's the weather in Walnut Creek, CA right now?"
+    assert:
+      - type: is-valid-openai-tools-call
+    description: "baseline (no reminder) — Walnut Creek"
+
+  - vars:
+      input: |
+        [
+          {"role": "system", "content": "When calling get_weather, the location argument must be a single plain string formatted as 'City, State' (for example: 'Austin, TX'). Do not use a JSON object or separate city/state fields for the location argument."},
+          {"role": "user", "content": "What's the weather in Walnut Creek, CA right now?"}
+        ]
+    assert:
+      - type: is-valid-openai-tools-call
+    description: "with schema reminder — Walnut Creek"
+
+  - vars:
+      input: "can u check the temp over in oakland right now"
+    assert:
+      - type: is-valid-openai-tools-call
+    description: "baseline (no reminder) — Oakland"
+
+  - vars:
+      input: |
+        [
+          {"role": "system", "content": "When calling get_weather, the location argument must be a single plain string formatted as 'City, State' (for example: 'Austin, TX'). Do not use a JSON object or separate city/state fields for the location argument."},
+          {"role": "user", "content": "can u check the temp over in oakland right now"}
+        ]
+    assert:
+      - type: is-valid-openai-tools-call
+    description: "with schema reminder — Oakland"

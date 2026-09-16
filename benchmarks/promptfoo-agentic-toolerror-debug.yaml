@@ -1,0 +1,99 @@
+# Debug config — diagnoses the suspicious 0/4 result on the newly-real
+# tool-error-recovery test in promptfoo-agentic.yaml (Sept 13).
+#
+# WHY THIS IS SUSPICIOUS: every one of the 4 models tested — including
+# qwen2.5:latest and qwen3.5:9b, which have a perfect record on every other
+# real test in this project — failed identically, each graded with the exact
+# same reason text ("did not recognize the ambiguity... remained silent").
+# A uniform failure across architecturally different models is exactly the
+# signature this project has already caught twice before as a config/
+# transport bug, not a real result (the `tools`-nesting 0/16 bug, and the
+# broken-Gemini-judge-default bug — see Project Instructions §6). This debug
+# config exists to find out whether that's what's happening again here,
+# before logging "no model handles tool-error recovery" as a real finding.
+#
+# PRIME SUSPECT: the original test injects a hand-built assistant message
+# with a `tool_calls` array and an empty `content: ""`, followed by a
+# synthetic `tool`-role message — a message shape never tested in this
+# project before (the working multi-turn CHAT test only ever used plain
+# user/assistant text turns, no tool_calls or tool-role messages). It may
+# not be surviving whatever promptfoo's ollama:chat provider does with it
+# before it reaches Ollama's /api/chat, or Ollama's own template may not
+# handle a REPLAYED (not model-generated) tool_calls turn the way it
+# handles one it just emitted itself.
+#
+# This tests 3 variants of the message shape against ONE reliable provider
+# (qwen3.5:9b — chosen because it has zero unrelated confounds; if a clean
+# model fails all 3 variants too, the message shape itself is the problem,
+# not this specific model):
+#   1. baseline — exact reproduction of the original shape (should
+#      reproduce the 0/4 failure if this run is consistent)
+#   2. omit the assistant tool_calls turn's `content` key entirely instead
+#      of setting it to "" (some parsers distinguish absent vs. empty)
+#   3. arguments as a plain JSON object instead of a JSON-encoded string
+#      (the assistant tool_calls.function.arguments field is technically
+#      supposed to be a STRING per the OpenAI spec, which the original test
+#      followed — but Ollama's own chat template may expect an object)
+#
+# Run: npx promptfoo@latest eval -c promptfoo-agentic-toolerror-debug.yaml --output toolerror-debug-result.json
+# Then check response.output for each — if it's genuinely non-empty text
+# that engages with the error (even a bad answer), the shape is parsing
+# fine and the original 0/4 may be closer to real. If it's still empty
+# across variants, the injected shape itself is the culprit and the
+# tool-error-recovery test needs a fundamentally different approach (e.g.
+# scripting it against Ollama's raw API directly instead of promptfoo, to
+# rule out promptfoo's provider layer specifically).
+
+description: "DEBUG: tool-error-recovery message-shape diagnosis (qwen3.5:9b, 3 variants)"
+
+x-weather-tool: &weather_tool
+  type: function
+  function:
+    name: get_weather
+    description: Get current weather for a location
+    parameters:
+      type: object
+      properties:
+        location: { type: string, description: "City, State" }
+      required: [location]
+
+providers:
+  - id: ollama:chat:qwen3.5:9b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+
+prompts:
+  - "{{input}}"
+
+tests:
+  - vars:
+      input: |
+        [
+          {"role": "user", "content": "Get the weather for Springfield."},
+          {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"location\": \"Springfield\"}"}}]},
+          {"role": "tool", "tool_call_id": "call_1", "content": "Error: ambiguous location — at least 12 US cities are named Springfield. Please specify a state."}
+        ]
+    # No assert on purpose — this is a diagnostic run to inspect raw
+    # response.output, not a scored test. A pass/fail badge would just be
+    # noise here.
+    description: "variant 1 - baseline (exact reproduction of original shape)"
+
+  - vars:
+      input: |
+        [
+          {"role": "user", "content": "Get the weather for Springfield."},
+          {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"location\": \"Springfield\"}"}}]},
+          {"role": "tool", "tool_call_id": "call_1", "content": "Error: ambiguous location — at least 12 US cities are named Springfield. Please specify a state."}
+        ]
+    description: "variant 2 - assistant content key omitted entirely (not empty string)"
+
+  - vars:
+      input: |
+        [
+          {"role": "user", "content": "Get the weather for Springfield."},
+          {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": {"location": "Springfield"}}}]},
+          {"role": "tool", "tool_call_id": "call_1", "content": "Error: ambiguous location — at least 12 US cities are named Springfield. Please specify a state."}
+        ]
+    description: "variant 3 - arguments as a plain object instead of a JSON-encoded string"

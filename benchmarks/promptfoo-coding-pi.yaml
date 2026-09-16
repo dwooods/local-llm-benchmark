@@ -1,0 +1,109 @@
+# Coding assistant suite — Raspberry Pi 5 shortlist variant, judge routed to the PC (Option 4)
+# Derived from promptfoo-coding.yaml (PC version). Tests are UNCHANGED — only
+# `providers:` (Pi shortlist) and the judge (routed to the PC over the LAN)
+# differ. See promptfoo-chat-pi.yaml for the full prerequisites checklist
+# (expose PC's Ollama to the network, find its LAN IP, confirm firewall +
+# reachability with `curl http://<PC_LAN_IP>:11434/v1/models` from the Pi,
+# confirm deepseek-r1:14b is present on the PC) — do all of that before
+# running this file too; don't repeat the checklist per-file, just do it once
+# before the first of the three judge-dependent Pi runs.
+#
+# Run ON THE PI:
+#   npx promptfoo@latest eval -c promptfoo-coding-pi.yaml -j 1
+
+description: "Pi 5 coding-model shortlist vs the §5 coding suite, judge routed to the PC over the LAN"
+
+providers:
+  - id: ollama:chat:llama3.2:1b
+    config:
+      temperature: 0.2
+      num_predict: 1024
+      num_ctx: 4096
+  - id: ollama:chat:qwen2.5:1.5b
+    config:
+      temperature: 0.2
+      num_predict: 1024
+      num_ctx: 4096
+  - id: ollama:chat:gemma2:2b
+    config:
+      temperature: 0.2
+      num_predict: 1024
+      num_ctx: 4096
+  - id: ollama:chat:llama3.2:3b
+    config:
+      temperature: 0.2
+      num_predict: 1024
+      num_ctx: 4096
+  - id: ollama:chat:qwen2.5:3b
+    config:
+      temperature: 0.2
+      num_predict: 1024
+      num_ctx: 4096
+  - id: ollama:chat:phi3.5:3.8b
+    config:
+      temperature: 0.2
+      num_predict: 1024
+      num_ctx: 4096
+
+# Judge routed to the PC's Ollama OpenAI-compatible endpoint — same
+# deepseek-r1:14b used as the fixed judge on the PC's own coding suite, kept
+# identical here for a directly comparable score. Deliberately not one of
+# the models under test above, to avoid a model grading its own output.
+defaultTest:
+  options:
+    provider:
+      id: openai:chat:deepseek-r1:14b
+      config:
+        apiBaseUrl: http://<PC_LAN_IP>:11434/v1
+        apiKey: ollama
+        num_ctx: 4096
+
+prompts:
+  - "{{task}}"
+
+tests:
+  - vars:
+      task: "Write a Python function `parse_duration(s: str) -> int` that converts a duration string like '1h30m', '45m', or '2h' into total seconds. No explanation, just the function."
+    assert:
+      - type: llm-rubric
+        value: "The response contains a working Python function named parse_duration that correctly handles hour ('h') and minute ('m') suffixes and returns an integer number of seconds. Minor style differences are fine; incorrect logic or missing function is a fail."
+
+  - vars:
+      task: |
+        This test is failing. Fix the bug and explain the one-line change.
+
+        def average(nums):
+            return sum(nums) / len(nums)
+
+        # test_average.py
+        def test_empty_list():
+            assert average([]) == 0
+
+        # AssertionError / ZeroDivisionError: division by zero
+    assert:
+      - type: llm-rubric
+        value: "The response identifies the ZeroDivisionError on an empty list and fixes it (e.g. returning 0 when len(nums) == 0), and the explanation correctly describes the root cause."
+
+  - vars:
+      task: |
+        Explain what this code does, then refactor it to be more readable, keeping behavior identical:
+
+        def f(l):
+            r=[]
+            for i in l:
+                if i%2==0:
+                    r.append(i*i)
+            return r
+    assert:
+      - type: llm-rubric
+        value: "The explanation correctly says this squares the even numbers in a list. The refactor preserves that exact behavior (same inputs -> same outputs) while using clearer names and/or a list comprehension."
+
+  - vars:
+      task: |
+        Add input validation to this function. You only have this one function — no other files are shown.
+
+        def divide(a, b):
+            return a / b
+    assert:
+      - type: llm-rubric
+        value: "Score PASS if the model either (a) adds sensible validation (e.g. checks b != 0, raises a clear error) using only the info given, or (b) explicitly asks what error-handling convention the rest of the codebase uses before assuming one. Score FAIL if it silently invents project-wide conventions (custom exception classes, logging patterns, etc.) it has no way of knowing, without flagging the assumption — this test is checking for hallucinated context awareness, per the project's 'multi-file edit awareness' criterion."

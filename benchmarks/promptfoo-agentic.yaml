@@ -1,0 +1,151 @@
+# Agentic / tool-use suite — maps to Project Instructions §5 "Agentic / tool use"
+# Run: npx promptfoo@latest eval -c promptfoo-agentic.yaml
+#
+# NOTE: this tests whether the MODEL emits a correctly-structured tool call
+# via Ollama's own function-calling support — it does NOT test a specific
+# client's tool-execution loop (Jan, Open WebUI, etc). Per Project
+# Instructions §2, a client can fail to execute a tool call even when the
+# model itself emits a valid one (the Jan+Ollama /v1 limitation) — so a PASS
+# here means "the model can do it," not "every client will actually run it."
+#
+# FIX (2026-09-13): the first run of this file scored 0 real tool calls across
+# all 4 models on all 3 weather tests — every response was plain declining or
+# hallucinated prose. Root cause: `tools` was nested under each test's
+# `options.provider.config`, but in a multi-provider matrix eval (4 providers
+# listed below), `options.provider` only overrides the provider used for
+# MODEL-GRADED assertions (e.g. the llm-rubric judge) — it does NOT reach the
+# actual generation call made to each of the 4 providers being tested. Since
+# none of the matrix providers had `tools` in their own config, no model was
+# ever given the tool schema to call, so of course none of them called it.
+# Fix: the `tools` schema now lives directly on each provider's own `config`
+# block below, so every provider gets it on every request in this file.
+
+# FIX 2 (2026-09-13, same session): test 4's rubric assertion had no explicit
+# judge `provider:` override, unlike test 3. Without one, the llm-rubric
+# assertion fell through to whatever grading provider promptfoo defaults to
+# in this environment — which turned out to be a Google Gemini model, and a
+# deprecated one at that ("models/gemini-2.5-pro is no longer available to
+# new users"), so grading hard-errored with a 404 instead of scoring anything.
+# Two problems in one: (a) an unintended cloud call during a benchmark whose
+# whole point is measuring purely local inference, and (b) it's broken
+# regardless. Fixed by adding a `defaultTest.options.provider` fallback below
+# pointing at the local judge, so ANY rubric assertion in this file that
+# doesn't set its own provider (like test 4, still a placeholder) safely uses
+# Ollama instead of an unpredictable external default. Test 4's rubric text
+# ("N/A placeholder") was also removed — a meaningless rubric was producing a
+# guaranteed-FAIL every run even before the Gemini error, which isn't useful
+# either. Test 4 now just records model output with no pass/fail badge until
+# it's built into a real multi-turn tool-error-recovery case.
+
+description: "PC agentic/tool-use shortlist — structured tool-calling reliability"
+
+# Safety net: any llm-rubric assertion in this file without its own explicit
+# `provider:` override uses this local judge instead of promptfoo's
+# environment-dependent default (see FIX 2 note above).
+defaultTest:
+  options:
+    provider:
+      id: ollama:chat:deepseek-r1:14b
+      config:
+        num_ctx: 4096
+
+# Shared tool schema every provider in this file gets on every request.
+# Every test in this suite is weather-related, so attaching it globally
+# (rather than per-test) is correct here and avoids the per-test
+# options.provider trap described above.
+x-weather-tool: &weather_tool
+  type: function
+  function:
+    name: get_weather
+    description: Get current weather for a location
+    parameters:
+      type: object
+      properties:
+        location: { type: string, description: "City, State" }
+      required: [location]
+
+# num_ctx fixed at 4096 across every provider (including the judge below) —
+# keeps context window identical across models under test, matched to §5's
+# short test prompts, and clear of the split-mode risk on the two 12b+ models.
+providers:
+  - id: ollama:chat:qwen2.5:latest
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:llama3:latest
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:qwen3.5:9b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:qwen2.5-coder:14b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+
+prompts:
+  - "{{request}}"
+
+tests:
+  # Single tool call, correct JSON arguments
+  - vars:
+      request: "What's the weather in Walnut Creek, CA right now?"
+    assert:
+      - type: is-valid-openai-tools-call
+
+  # Schema adherence under a slightly odd/ambiguous phrasing
+  - vars:
+      request: "can u check the temp over in oakland right now"
+    assert:
+      - type: is-valid-openai-tools-call
+
+  # Multi-step: request that plausibly needs 2 chained calls
+  - vars:
+      request: "Check the weather in Denver, and if it's below 40F, also check the weather in Phoenix as a backup."
+    assert:
+      - type: llm-rubric
+        value: "The model either issues a get_weather tool call for Denver first (correct - it needs that result before deciding on Phoenix), or clearly reasons through the two-step plan in text before/alongside the call. Fail if it fabricates a temperature for Denver instead of calling the tool, or calls the tool for Phoenix without any apparent reasoning about the conditional."
+        provider:
+          id: ollama:chat:deepseek-r1:14b
+          config:
+            num_ctx: 4096
+
+  # Recovery: tool returns an error.
+  # FIX (2026-09-13): fleshed out from the placeholder into a real multi-turn
+  # case. This uses the same JSON-array-as-messages mechanism as the chat
+  # suite's multi-turn test (see promptfoo-chat.yaml) — a hand-built assistant
+  # tool-call turn plus a synthetic tool-result turn carrying an ambiguity
+  # error, checking whether the model's NEXT turn asks for clarification
+  # rather than guessing a specific Springfield or repeating the identical
+  # failed call.
+  #
+  # FIX 3 (2026-09-13, same day): the first version of this test used
+  # `arguments` as a JSON-ENCODED STRING for the injected assistant
+  # tool_calls turn (matching the literal OpenAI spec, which documents
+  # `function.arguments` as a string). That produced a uniform, suspicious
+  # 0/4 across every model in this suite — including qwen2.5:latest and
+  # qwen3.5:9b, which have never failed anything else. An isolated debug run
+  # (promptfoo-agentic-toolerror-debug.yaml) isolated the cause: Ollama's
+  # chat template apparently needs `arguments` as a plain JSON OBJECT when
+  # REPLAYING a synthetic tool_calls turn, not a string — the string form
+  # silently produces an EMPTY completion rather than an error, and the
+  # object form produced a correct, sensible clarifying question. Fixed
+  # below by using an object. This is specific to injected/replayed history
+  # turns — it does not affect tests 1-3 above, where the model generates
+  # its own tool_calls fresh (a different code path).
+  - vars:
+      request: |
+        [
+          {"role": "user", "content": "Get the weather for Springfield."},
+          {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": {"location": "Springfield"}}}]},
+          {"role": "tool", "tool_call_id": "call_1", "content": "Error: ambiguous location — at least 12 US cities are named Springfield. Please specify a state."}
+        ]
+    assert:
+      - type: llm-rubric
+        value: "The model's next turn should recognize the tool returned an ambiguity error and either ask the user which state/Springfield they mean, or offer a short list of the most likely candidates and ask the user to pick one. FAIL if the model silently picks a single Springfield and reports a confident weather answer as though there were no ambiguity, or if it repeats the identical failed tool call (same unqualified 'Springfield' location) instead of adapting."

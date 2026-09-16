@@ -1,0 +1,135 @@
+# Agentic / tool-use suite — Raspberry Pi 5 shortlist variant.
+# Derived from promptfoo-agentic.yaml (PC version).
+#
+# UPDATED (judge-routing round, Option 4): tests 1-2 (schema-only,
+# `is-valid-openai-tools-call`) are unchanged from the version already run
+# Sept 15 (5/12 result logged in Benchmark Log). Tests 3-4 (multi-step
+# Denver/Phoenix; tool-error recovery) are ADDED BACK IN here — both need
+# `llm-rubric` graded by deepseek-r1:14b, which can't fit on the Pi's 7.87GB
+# usable RAM, so the judge is routed over the LAN to the PC's Ollama instead
+# (see prerequisites below). Re-running tests 1-2 alongside 3-4 in the same
+# file is expected and fine — it's a second live data point on the
+# empty-output-under-memory-pressure question logged for the extraction/
+# agentic runs (see Project Instructions §2), on top of being the first real
+# multi-step and tool-error-recovery data for this platform.
+#
+# PREREQUISITES — see promptfoo-chat-pi.yaml's header comment for the full
+# checklist (expose PC's Ollama to the network, find its LAN IP and replace
+# <PC_LAN_IP> below, confirm firewall + `curl http://<PC_LAN_IP>:11434/v1/models`
+# reachability from the Pi, confirm deepseek-r1:14b is present on the PC).
+# Do it once before the first of the three judge-dependent Pi runs.
+#
+# Run on the Pi itself, against its own local Ollama for the 6 providers
+# below (no OLLAMA_BASE_URL needed — this hits localhost:11434 by default):
+#   npx promptfoo@latest eval -c promptfoo-agentic-pi.yaml -j 1
+#
+# -j 1 is not optional here — single CPU on the Pi, one generation at a time,
+# and this file now also shares the PC's single GPU for grading.
+
+description: "Pi 5 agentic/tool-use shortlist — full 4-test suite, judge routed to the PC over the LAN"
+
+# Judge routed to the PC's Ollama OpenAI-compatible endpoint for the two
+# llm-rubric tests below (tests 3-4) — same deepseek-r1:14b used as the fixed
+# judge on the PC's own agentic suite. Tests 1-2 don't use this at all
+# (schema-only assertion, no judge involved).
+defaultTest:
+  options:
+    provider:
+      id: openai:chat:deepseek-r1:14b
+      config:
+        apiBaseUrl: http://<PC_LAN_IP>:11434/v1
+        apiKey: ollama
+        num_ctx: 4096
+
+# Shared tool schema every provider gets on every request — carried over
+# unchanged from the PC file, including the top-level `config.tools`
+# placement that fixed the original 0/16 nesting bug there.
+x-weather-tool: &weather_tool
+  type: function
+  function:
+    name: get_weather
+    description: Get current weather for a location
+    parameters:
+      type: object
+      properties:
+        location: { type: string, description: "City, State" }
+      required: [location]
+
+providers:
+  - id: ollama:chat:llama3.2:1b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:qwen2.5:1.5b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:gemma2:2b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:llama3.2:3b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:qwen2.5:3b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+  - id: ollama:chat:phi3.5:3.8b
+    config:
+      temperature: 0.1
+      num_ctx: 4096
+      tools: [*weather_tool]
+
+prompts:
+  - "{{request}}"
+
+tests:
+  # Single tool call, correct JSON arguments
+  - vars:
+      request: "What's the weather in Walnut Creek, CA right now?"
+    assert:
+      - type: is-valid-openai-tools-call
+
+  # Schema adherence under a slightly odd/ambiguous phrasing
+  - vars:
+      request: "can u check the temp over in oakland right now"
+    assert:
+      - type: is-valid-openai-tools-call
+
+  # Multi-step: request that plausibly needs 2 chained calls. Graded by the
+  # LAN-routed judge (defaultTest above) since no per-test provider override
+  # is given here — unlike the PC file, which pins this test's rubric
+  # provider explicitly. Confirm during the first run that it's actually
+  # landing on the PC's deepseek-r1:14b and not erroring or silently
+  # defaulting elsewhere (same class of bug the PC suite caught twice — see
+  # Project Instructions §6).
+  - vars:
+      request: "Check the weather in Denver, and if it's below 40F, also check the weather in Phoenix as a backup."
+    assert:
+      - type: llm-rubric
+        value: "The model either issues a get_weather tool call for Denver first (correct - it needs that result before deciding on Phoenix), or clearly reasons through the two-step plan in text before/alongside the call. Fail if it fabricates a temperature for Denver instead of calling the tool, or calls the tool for Phoenix without any apparent reasoning about the conditional."
+
+  # Recovery: tool returns an error. Uses the same JSON-array-as-messages
+  # mechanism as the PC file and the chat suite's multi-turn test — a
+  # hand-built assistant tool-call turn plus a synthetic tool-result turn
+  # carrying an ambiguity error. `arguments` is a plain JSON OBJECT, not a
+  # string, per the fix found on the PC (see promptfoo-agentic.yaml's FIX 3
+  # comment and Project Instructions §6 bug #3) — Ollama silently returns an
+  # empty completion if this is a JSON-encoded string instead.
+  - vars:
+      request: |
+        [
+          {"role": "user", "content": "Get the weather for Springfield."},
+          {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": {"location": "Springfield"}}}]},
+          {"role": "tool", "tool_call_id": "call_1", "content": "Error: ambiguous location — at least 12 US cities are named Springfield. Please specify a state."}
+        ]
+    assert:
+      - type: llm-rubric
+        value: "The model's next turn should recognize the tool returned an ambiguity error and either ask the user which state/Springfield they mean, or offer a short list of the most likely candidates and ask the user to pick one. FAIL if the model silently picks a single Springfield and reports a confident weather answer as though there were no ambiguity, or if it repeats the identical failed tool call (same unqualified 'Springfield' location) instead of adapting."

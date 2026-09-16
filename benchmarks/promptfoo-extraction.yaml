@@ -1,0 +1,70 @@
+# Structured/data extraction suite — maps to Project Instructions §5
+# Run: npx promptfoo@latest eval -c promptfoo-extraction.yaml
+#
+# For the "consistency check: same input run 3x" bullet in §5, check
+# `npx promptfoo@latest eval --help` for a --repeat flag (recent promptfoo
+# versions support repeating each test N times) rather than hand-duplicating
+# test cases — confirm the exact flag name against your installed version.
+
+description: "PC extraction-model shortlist — structured JSON reliability"
+
+# num_ctx fixed at 4096 across every provider — see note in promptfoo-coding.yaml.
+providers:
+  - id: ollama:chat:qwen2.5:latest
+    config:
+      temperature: 0.0
+      num_ctx: 4096
+  - id: ollama:chat:qwen3.5:9b
+    config:
+      temperature: 0.0
+      num_ctx: 4096
+  - id: ollama:chat:gemma4:12b
+    config:
+      temperature: 0.0
+      num_ctx: 4096
+
+prompts:
+  - |
+    Return ONLY raw JSON, no markdown fences, no explanation.
+
+    {{task}}
+
+tests:
+  - vars:
+      task: |
+        Extract fields into this exact JSON schema: {"name": string, "email": string, "company": string|null}
+
+        Text: "Hey, this is Maria Chen from Bright Financial, you can reach me at m.chen@brightfin.example if you have questions about the invoice."
+    assert:
+      - type: is-json
+      - type: javascript
+        value: |
+          const j = JSON.parse(output);
+          return j.name === "Maria Chen" && j.email === "m.chen@brightfin.example" && j.company === "Bright Financial";
+
+  - vars:
+      task: |
+        Classify the sentiment of this support ticket as exactly one of: "angry", "frustrated", "neutral", "satisfied". Return {"sentiment": "<one of those four>"}.
+
+        Ticket: "This is the third time I've had to email about this. My card was charged twice for the same order and nobody has responded in four days."
+    assert:
+      - type: is-json
+      - type: javascript
+        value: |
+          const j = JSON.parse(output);
+          return ["angry", "frustrated"].includes(j.sentiment);
+
+  - vars:
+      task: |
+        Extract this messy pasted table into JSON: {"rows": [{"item": string, "qty": number, "price": number}]}
+
+        Item          Qty   Price
+        Widget A       3    $12.50
+        Gadget B      -     $99.00 (out of stock)
+        Widget A       1     12.5
+    assert:
+      - type: is-json
+      - type: javascript
+        value: |
+          const j = JSON.parse(output);
+          return Array.isArray(j.rows) && j.rows.length === 3 && j.rows.every(r => typeof r.qty !== "undefined");

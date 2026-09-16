@@ -1,0 +1,65 @@
+# Vision/OCR extraction suite — Raspberry Pi 5
+# Workload: §5 "Structured/data extraction — image-input variant" (Project Instructions §4/§5)
+# Models: minicpm-v4.6 and qwen3-vl:2b — both Pi-scale per §4
+#
+# Same design as the PC version: no llm-rubric/judge, deterministic javascript assertion instead.
+# That also means no "Option 4" LAN judge-routing needed for this suite — it runs standalone on
+# the Pi with no dependency on the PC being up or its network-exposure toggle being on.
+#
+# SETUP BEFORE RUNNING:
+# 1. ollama pull minicpm-v4.6 && ollama pull qwen3-vl:2b
+# 2. Confirm OLLAMA_MAX_LOADED_MODELS=1 is still set on the Pi (see Project Instructions §2/§6) —
+#    a 2-model matrix is small, but there's no reason to risk the same resource-contention bug.
+# 3. Reuse the SAME photographed receipts/forms and the SAME base64 .txt files you made for the
+#    PC suite (images/ folder) — copy them over so both machines are scored on identical inputs.
+#    Linux encode command if you're doing it fresh on the Pi instead: base64 -w 0 receipt1.jpg > images/receipt1_b64.txt
+# 4. Put assertions/check-fields.js (provided separately) next to this yaml.
+# 5. Fill in the same expectedVendor/expectedTotal ground truth you used on the PC config —
+#    keep both yamls' test cases in sync so PC vs. Pi is a fair comparison on the same documents.
+# 6. Run: npx promptfoo@latest eval -c promptfoo-vision-pi.yaml -j 1 --no-cache
+#    View: npx promptfoo@latest view
+
+providers:
+  - id: ollama:chat:minicpm-v4.6
+    config:
+      temperature: 0
+      num_ctx: 8192
+  - id: ollama:chat:qwen3-vl:2b
+    config:
+      temperature: 0
+      num_ctx: 8192
+
+prompts:
+  - |
+    [
+      {
+        "role": "user",
+        "content": "Extract fields from this receipt or document image. Return ONLY raw JSON, no markdown fences, no explanation, matching exactly this shape: {\"vendor\": \"string\", \"date\": \"string, as printed on the document\", \"total\": number, \"items\": [{\"item\": \"string\", \"qty\": number, \"price\": number}]}",
+        "images": ["{{image_b64}}"]
+      }
+    ]
+
+defaultTest:
+  assert:
+    - type: is-json
+    - type: javascript
+      value: file://assertions/check-fields.js
+
+tests:
+  - description: "Receipt 1 — keep identical to the PC config's test 1 (same document, same ground truth)"
+    vars:
+      image_b64: file://images/receipt1_b64.txt
+      expectedVendor: "REPLACE_WITH_ACTUAL_VENDOR_NAME"
+      expectedTotal: 0.00
+
+  - description: "Receipt 2 — keep identical to the PC config's test 2"
+    vars:
+      image_b64: file://images/receipt2_b64.txt
+      expectedVendor: "REPLACE_WITH_ACTUAL_VENDOR_NAME"
+      expectedTotal: 0.00
+
+  - description: "Form 3 — keep identical to the PC config's test 3"
+    vars:
+      image_b64: file://images/form3_b64.txt
+      expectedVendor: "REPLACE_WITH_ACTUAL_VENDOR_OR_ORG_NAME"
+      expectedTotal: 0.00

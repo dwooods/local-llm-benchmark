@@ -1,0 +1,131 @@
+# General chat/Q&A suite — Raspberry Pi 5 shortlist variant, judge routed to the PC (Option 4)
+# Derived from promptfoo-chat.yaml (PC version). Tests are UNCHANGED from the
+# PC file — only `providers:` (swapped to the six Pi shortlist models) and
+# the judge provider (routed over the LAN to the PC's Ollama instance,
+# instead of trying to run deepseek-r1:14b locally on the Pi, which can't fit
+# its ~9GB in the Pi's 7.87GB usable RAM) are different.
+#
+# PREREQUISITES — do these BEFORE running this file:
+#   1. On the PC: Ollama desktop app > Settings > turn "Expose Ollama to the
+#      network" ON (temporarily — this is the opposite of the standing
+#      pre-run checklist in Project Instructions §6, which says to keep it
+#      OFF; turn it back off once this cross-machine testing round is done).
+#   2. Find the PC's LAN IP (Windows: `ipconfig`, look for the IPv4 Address
+#      under the active adapter) and replace <PC_LAN_IP> below with it.
+#   3. Confirm Windows Firewall allows inbound on port 11434 from the Pi's IP
+#      (Ollama may prompt to allow this automatically the first time it binds
+#      to 0.0.0.0; if not, add an inbound rule for TCP 11434).
+#   4. From the Pi, verify reachability BEFORE running the suite:
+#        curl http://<PC_LAN_IP>:11434/v1/models
+#      This should list the PC's models (including deepseek-r1:14b). If it
+#      times out or refuses, fix networking before running promptfoo — don't
+#      let it fail silently mid-suite.
+#   5. Confirm `deepseek-r1:14b` is present on the PC (`ollama list`) and
+#      loads cleanly there — this run will now load it on the PC's GPU while
+#      generation happens on the Pi's CPU, so nothing else should be actively
+#      using the PC's GPU at the same time.
+#
+# UNCONFIRMED, worth checking during the first run: whether `num_ctx: 4096`
+# on the judge's `openai:chat:` config actually reaches Ollama's OpenAI-
+# compatible endpoint the same way it reliably does via the native
+# `ollama:chat:` provider (confirmed working, Project Instructions §2). Cross-
+# check with `ollama ps` ON THE PC mid-run — if CONTEXT isn't 4096, this is a
+# new config gap to fix, following the project's established pattern of
+# verifying rather than assuming num_ctx passthrough works.
+#
+# Run ON THE PI (against its own local Ollama for the 6 providers below):
+#   npx promptfoo@latest eval -c promptfoo-chat-pi.yaml -j 1
+#
+# -j 1 is not optional — single CPU, one generation at a time, and this run
+# also depends on a single shared PC GPU for grading, so parallel requests
+# would contend for both machines at once.
+
+description: "Pi 5 general chat/Q&A shortlist, judge routed to the PC over the LAN"
+
+providers:
+  - id: ollama:chat:llama3.2:1b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+  - id: ollama:chat:qwen2.5:1.5b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+  - id: ollama:chat:gemma2:2b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+  - id: ollama:chat:llama3.2:3b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+  - id: ollama:chat:qwen2.5:3b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+  - id: ollama:chat:phi3.5:3.8b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+
+# Judge routed to the PC's Ollama OpenAI-compatible endpoint instead of a
+# local `ollama:chat:` provider — deepseek-r1:14b can't fit on the Pi.
+defaultTest:
+  options:
+    provider:
+      id: openai:chat:deepseek-r1:14b
+      config:
+        apiBaseUrl: http://<PC_LAN_IP>:11434/v1
+        apiKey: ollama
+        num_ctx: 4096
+
+prompts:
+  - "{{input}}"
+
+tests:
+  - vars:
+      input: "What year was the Raspberry Pi 5 released?"
+    assert:
+      - type: llm-rubric
+        value: "Answer must affirmatively confirm the Raspberry Pi 5 has been released, ideally naming 2023 as the year. FAIL if the model claims the Pi 5 has not been released, is unreleased/upcoming, or hedges without ever confirming a real release — even if the text happens to contain the string '2023' as part of a disclaimer (e.g. a knowledge-cutoff caveat) rather than as the actual answer."
+
+  - vars:
+      input: "How much usable RAM does an 8GB Raspberry Pi 5 actually expose to the OS, roughly?"
+    assert:
+      - type: llm-rubric
+        value: "Answer is in the ballpark of 7.7-8GB (the actual measured figure in this project is 7.87GB) — a wildly different number is a fail."
+
+  - vars:
+      input: |
+        Summarize the following in 2 sentences:
+
+        The 12GB VRAM cliff on this rig means models that fit fully in the RX 6700 XT's
+        VRAM run at native bandwidth and are dramatically faster than CPU-only inference —
+        qwen2.5:3b hit 138.94 tok/s versus a 6.88 tok/s CPU baseline. Once a model's
+        footprint exceeds roughly 11.2GB, Ollama splits layers across the PCIe bus into
+        system RAM, and this isn't simply slower — it can be worse than CPU-only entirely.
+        gemma4:31b in split mode measured about 5.5 tok/s, actually slower than the plain
+        CPU baseline for a smaller model, while gpt-oss:20b in split mode still beat the
+        CPU baseline at 11.28 tok/s. The practical rule is to treat ~13B params at Q4_K_M
+        as the comfortable, reliably fast ceiling, and to test anything above that
+        individually rather than assuming split-mode performance either way.
+    assert:
+      - type: llm-rubric
+        value: "The 2-sentence summary correctly conveys that (1) models fitting in VRAM are much faster, and (2) exceeding the VRAM budget triggers unpredictable split-mode performance that can be worse than CPU-only, not just slower. Missing either point, or claiming split-mode is always bad/always fine, is a fail."
+
+  - vars:
+      input: |
+        [
+          {"role": "user", "content": "I'm benchmarking local LLMs on a Raspberry Pi 5 with 8GB of RAM."},
+          {"role": "assistant", "content": "Got it — an 8GB Pi 5 is CPU-only, memory-bandwidth-limited hardware. What would you like to know?"},
+          {"role": "user", "content": "What's the capital of Australia?"},
+          {"role": "assistant", "content": "Canberra."},
+          {"role": "user", "content": "In one sentence, what does quantization mean for an LLM?"},
+          {"role": "assistant", "content": "Quantization reduces the numerical precision of a model's weights to shrink its size and speed up inference, at some cost to accuracy."},
+          {"role": "user", "content": "What's a good name for a pet golden retriever?"},
+          {"role": "assistant", "content": "Something like Biscuit, Duke, or Maple would suit a golden retriever well."},
+          {"role": "user", "content": "Given everything I told you about my hardware, would a 9B model be a realistic pick for live interactive chat, or should I stick to something smaller?"}
+        ]
+    assert:
+      - type: llm-rubric
+        value: "The final answer must correctly recall and apply the turn-1 fact (8GB Raspberry Pi 5, CPU-only, memory-bandwidth-limited) to conclude that a 9B model would likely be too slow for live/interactive chat on that hardware, and should recommend staying in a smaller (roughly 1-4B) parameter tier instead. FAIL if the answer ignores or contradicts the Pi 5 hardware context from turn 1, treats the question as hardware-agnostic, or gives a generic answer that doesn't engage with the specific constraint established earlier in the conversation."

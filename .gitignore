@@ -1,0 +1,19 @@
+# Generated at replication time by scripts/encode_images.py — see benchmarks/images/
+benchmarks/images/*_b64.txt
+
+# promptfoo's local cache and result exports (large, machine-specific, regenerate per run)
+.promptfoo/
+node_modules/
+*-result.json
+eval-*.json
+
+# Downloaded Piper voice model (get it with: python -m piper.download_voices en_US-lessac-medium)
+*.onnx
+*.onnx.json
+
+# Voice assistant scratch audio
+voice-assistant/*.wav
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db

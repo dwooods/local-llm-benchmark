@@ -1,0 +1,87 @@
+# Vision/OCR extraction suite — Windows PC
+# Workload: §5 "Structured/data extraction — image-input variant" (Project Instructions §4/§5)
+# Models: glm-ocr (OCR specialist) and qwen3-vl:8b (general vision, PC sweet spot per §4)
+#
+# Design note: this suite deliberately uses NO llm-rubric / no LLM judge. Ground truth for a
+# receipt/form is objective (vendor + total read by eye off the real document), so a
+# deterministic javascript assertion is strictly more trustworthy here than a judge model —
+# and it sidesteps the whole class of judge false-negative bugs this project already found
+# with deepseek-r1:14b on the coding suite (see Benchmark Log, Sept 13). No "Option 4" LAN
+# routing needed for this suite either, for the same reason.
+#
+# SETUP:
+# 1. ollama pull glm-ocr && ollama pull qwen3-vl:8b   [already done — both in `ollama list`]
+# 2. Put assertions/check-fields.js next to this yaml.
+# 3. images/ already has the 6 base64 .txt files matching the test cases below.
+# 4. Run: npx promptfoo@latest eval -c promptfoo-vision-pc.yaml -j 1 --no-cache
+#    View: npx promptfoo@latest view
+#
+# WATCH FOR while reviewing results:
+# - La Cabaña receipt has TWO prices printed (card $57.71 vs. cash $55.49). Ground truth here
+#   uses the card/primary total ($57.71) — a model reporting $55.49 picked the OTHER real
+#   number on the receipt, not necessarily a hallucination. Worth eyeballing that specific
+#   failure rather than trusting the auto pass/fail alone.
+# - Costa receipt is priced in EUROS (€5.00), the only non-USD document in the set — worth
+#   noting whether any model gets confused by the currency symbol or silently assumes USD.
+
+providers:
+  - id: ollama:chat:glm-ocr
+    config:
+      temperature: 0
+      num_ctx: 8192
+  - id: ollama:chat:qwen3-vl:8b
+    config:
+      temperature: 0
+      num_ctx: 8192
+
+prompts:
+  - |
+    [
+      {
+        "role": "user",
+        "content": "Extract fields from this receipt or document image. Return ONLY raw JSON, no markdown fences, no explanation, matching exactly this shape: {\"vendor\": \"string\", \"date\": \"string, as printed on the document\", \"total\": number (the final amount actually paid or due, including any tax, VAT, or service charge — not a pre-tax subtotal), \"items\": [{\"item\": \"string\", \"qty\": number, \"price\": number}]}",
+        "images": ["{{image_b64}}"]
+      }
+    ]
+
+defaultTest:
+  assert:
+    - type: javascript
+      value: file://assertions/check-fields.js
+
+tests:
+  - description: "Coffee receipt — Costa (EUR pricing, only non-USD document in the set)"
+    vars:
+      image_b64: file://images/coffee_receipt_b64.txt
+      expectedVendor: "Costa"
+      expectedTotal: 5.00
+
+  - description: "Restaurant receipt — La Cabaña (has two totals printed: card $57.71 / cash $55.49 — see note above)"
+    vars:
+      image_b64: file://images/good_guy_restaurant_receipt_b64.txt
+      expectedVendor: "La Cabaña"
+      expectedTotal: 57.71
+
+  - description: "Grocery receipt — Green Grocers"
+    vars:
+      image_b64: file://images/Green_grocery_geceipt_b64.txt
+      expectedVendor: "Green Grocers"
+      expectedTotal: 21.61
+
+  - description: "Home improvement receipt — The Home Depot"
+    vars:
+      image_b64: file://images/Home_Depot_Receipt_b64.txt
+      expectedVendor: "Home Depot"
+      expectedTotal: 180.52
+
+  - description: "Restaurant receipt — El Chalan Restaurant (Peruvian, Miami)"
+    vars:
+      image_b64: file://images/miami_floridal_receipt_b64.txt
+      expectedVendor: "El Chalan"
+      expectedTotal: 49.52
+
+  - description: "Restaurant receipt — Street Food Restaurant"
+    vars:
+      image_b64: file://images/street_food_receipt_b64.txt
+      expectedVendor: "Street Food"
+      expectedTotal: 19.65

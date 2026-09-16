@@ -1,0 +1,64 @@
+# Debug: does phi3.5:3.8b's empty-output failure in promptfoo-extraction-pi.yaml
+# reproduce when it's the ONLY provider in the matrix, with no other models
+# loading/evicting in between calls? If this passes (or at least returns real
+# content, even if fence-wrapped), that points to a reload-timing/eviction
+# issue specific to running phi3.5:3.8b inside a multi-provider matrix on
+# this Pi's limited RAM — a genuinely new finding, not a model capability
+# gap. If it STILL comes back empty here, the problem is something else in
+# promptfoo's request construction for this model specifically.
+#
+# Run: npx promptfoo@latest eval -c promptfoo-extraction-phi35-debug.yaml -j 1
+
+description: "Debug: phi3.5:3.8b extraction in isolation, no other providers"
+
+providers:
+  - id: ollama:chat:phi3.5:3.8b
+    config:
+      temperature: 0.0
+      num_ctx: 4096
+
+prompts:
+  - |
+    Return ONLY raw JSON, no markdown fences, no explanation.
+
+    {{task}}
+
+tests:
+  - vars:
+      task: |
+        Extract fields into this exact JSON schema: {"name": string, "email": string, "company": string|null}
+
+        Text: "Hey, this is Maria Chen from Bright Financial, you can reach me at m.chen@brightfin.example if you have questions about the invoice."
+    assert:
+      - type: is-json
+      - type: javascript
+        value: |
+          const j = JSON.parse(output);
+          return j.name === "Maria Chen" && j.email === "m.chen@brightfin.example" && j.company === "Bright Financial";
+
+  - vars:
+      task: |
+        Classify the sentiment of this support ticket as exactly one of: "angry", "frustrated", "neutral", "satisfied". Return {"sentiment": "<one of those four>"}.
+
+        Ticket: "This is the third time I've had to email about this. My card was charged twice for the same order and nobody has responded in four days."
+    assert:
+      - type: is-json
+      - type: javascript
+        value: |
+          const j = JSON.parse(output);
+          return ["angry", "frustrated"].includes(j.sentiment);
+
+  - vars:
+      task: |
+        Extract this messy pasted table into JSON: {"rows": [{"item": string, "qty": number, "price": number}]}
+
+        Item          Qty   Price
+        Widget A       3    $12.50
+        Gadget B      -     $99.00 (out of stock)
+        Widget A       1     12.5
+    assert:
+      - type: is-json
+      - type: javascript
+        value: |
+          const j = JSON.parse(output);
+          return Array.isArray(j.rows) && j.rows.length === 3 && j.rows.every(r => typeof r.qty !== "undefined");

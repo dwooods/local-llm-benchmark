@@ -1,0 +1,99 @@
+# General chat/Q&A suite — maps to Project Instructions §5 "General chat / Q&A"
+# Run: npx promptfoo@latest eval -c promptfoo-chat.yaml
+
+description: "PC general chat/Q&A shortlist"
+
+# num_ctx fixed at 4096 across every provider (including the judge) — see
+# note in promptfoo-coding.yaml. gpt-oss:20b is already a stretch-tier
+# split-mode model per Project Instructions §4, so this keeps context from
+# being an extra variable on top of that.
+providers:
+  - id: ollama:chat:qwen3.5:9b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+  - id: ollama:chat:phi4:14b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+  - id: ollama:chat:gpt-oss:20b
+    config:
+      temperature: 0.5
+      num_ctx: 4096
+
+defaultTest:
+  options:
+    provider:
+      id: ollama:chat:deepseek-r1:14b
+      config:
+        num_ctx: 4096
+
+prompts:
+  - "{{input}}"
+
+tests:
+  # Factual Q&A with a known answer.
+  # FIX (2026-09-13): was `contains-any: ["2023"]`. That let phi4:14b's WRONG
+  # answer ("the Pi 5 hasn't been officially released") register as a false
+  # PASS, purely because its own knowledge-cutoff disclaimer happened to
+  # mention "2023" in passing — see Benchmark Log / Project Instructions §9.
+  # Replaced with an llm-rubric that requires an AFFIRMATIVE release
+  # confirmation, not just the substring, so a hedge-and-deny answer fails
+  # even if "2023" appears somewhere in the text.
+  - vars:
+      input: "What year was the Raspberry Pi 5 released?"
+    assert:
+      - type: llm-rubric
+        value: "Answer must affirmatively confirm the Raspberry Pi 5 has been released, ideally naming 2023 as the year. FAIL if the model claims the Pi 5 has not been released, is unreleased/upcoming, or hedges without ever confirming a real release — even if the text happens to contain the string '2023' as part of a disclaimer (e.g. a knowledge-cutoff caveat) rather than as the actual answer."
+
+  - vars:
+      input: "How much usable RAM does an 8GB Raspberry Pi 5 actually expose to the OS, roughly?"
+    assert:
+      - type: llm-rubric
+        value: "Answer is in the ballpark of 7.7-8GB (the actual measured figure in this project is 7.87GB) — a wildly different number is a fail."
+
+  # Summarization of a long input
+  - vars:
+      input: |
+        Summarize the following in 2 sentences:
+
+        The 12GB VRAM cliff on this rig means models that fit fully in the RX 6700 XT's
+        VRAM run at native bandwidth and are dramatically faster than CPU-only inference —
+        qwen2.5:3b hit 138.94 tok/s versus a 6.88 tok/s CPU baseline. Once a model's
+        footprint exceeds roughly 11.2GB, Ollama splits layers across the PCIe bus into
+        system RAM, and this isn't simply slower — it can be worse than CPU-only entirely.
+        gemma4:31b in split mode measured about 5.5 tok/s, actually slower than the plain
+        CPU baseline for a smaller model, while gpt-oss:20b in split mode still beat the
+        CPU baseline at 11.28 tok/s. The practical rule is to treat ~13B params at Q4_K_M
+        as the comfortable, reliably fast ceiling, and to test anything above that
+        individually rather than assuming split-mode performance either way.
+    assert:
+      - type: llm-rubric
+        value: "The 2-sentence summary correctly conveys that (1) models fitting in VRAM are much faster, and (2) exceeding the VRAM budget triggers unpredictable split-mode performance that can be worse than CPU-only, not just slower. Missing either point, or claiming split-mode is always bad/always fine, is a fail."
+
+  # Multi-turn coherence (5+ turns) via a hand-built messages array.
+  # FIX (2026-09-13): fleshed out from the placeholder. Turn 1 establishes a
+  # hardware fact, turns 2-4 are deliberately unrelated filler (so an
+  # unhelpfully "sticky" model that just repeats turn 1's topic can't
+  # accidentally pass), turn 5 requires recalling turn 1 to answer correctly.
+  # The intermediate assistant turns are scripted/hardcoded, not
+  # model-generated — only the final turn is what's actually being graded.
+  # promptfoo/Ollama's chat provider treats a JSON-array `input` as the full
+  # messages list rather than a single user turn (same mechanism used for the
+  # agentic suite's tool-error-recovery test below).
+  - vars:
+      input: |
+        [
+          {"role": "user", "content": "I'm benchmarking local LLMs on a Raspberry Pi 5 with 8GB of RAM."},
+          {"role": "assistant", "content": "Got it — an 8GB Pi 5 is CPU-only, memory-bandwidth-limited hardware. What would you like to know?"},
+          {"role": "user", "content": "What's the capital of Australia?"},
+          {"role": "assistant", "content": "Canberra."},
+          {"role": "user", "content": "In one sentence, what does quantization mean for an LLM?"},
+          {"role": "assistant", "content": "Quantization reduces the numerical precision of a model's weights to shrink its size and speed up inference, at some cost to accuracy."},
+          {"role": "user", "content": "What's a good name for a pet golden retriever?"},
+          {"role": "assistant", "content": "Something like Biscuit, Duke, or Maple would suit a golden retriever well."},
+          {"role": "user", "content": "Given everything I told you about my hardware, would a 9B model be a realistic pick for live interactive chat, or should I stick to something smaller?"}
+        ]
+    assert:
+      - type: llm-rubric
+        value: "The final answer must correctly recall and apply the turn-1 fact (8GB Raspberry Pi 5, CPU-only, memory-bandwidth-limited) to conclude that a 9B model would likely be too slow for live/interactive chat on that hardware, and should recommend staying in a smaller (roughly 1-4B) parameter tier instead. FAIL if the answer ignores or contradicts the Pi 5 hardware context from turn 1, treats the question as hardware-agnostic, or gives a generic answer that doesn't engage with the specific constraint established earlier in the conversation."
