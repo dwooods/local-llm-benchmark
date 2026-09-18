@@ -60,7 +60,9 @@ def run_turn():
             "model": OLLAMA_MODEL,
             "messages": [{"role": "user", "content": transcript}],
             "stream": True,
-            "options": {"num_ctx": 4096},
+            "options": {"num_ctx": 8192},
+            "keep_alive": -1,
+            "think": False,
         },
         stream=True,
     )
