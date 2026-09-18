@@ -14,6 +14,10 @@ eval-*.json
 # Voice assistant scratch audio
 voice-assistant/*.wav
 
+# Python bytecode cache
+__pycache__/
+*.pyc
+
 # OS/editor cruft
 .DS_Store
 Thumbs.db
