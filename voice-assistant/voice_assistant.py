@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import wave
 
@@ -21,6 +22,48 @@ THINK = False  # hybrid-reasoning models (e.g. qwen3.5:9b) generate their whole 
                # (e.g. qwen2.5:3b), so it's safe to leave set either way when you swap models.
 VOICE_PATH = "en_US-lessac-medium.onnx"
 OLLAMA_URL = "http://localhost:11434/api/chat"
+SYSTEM_PROMPT = (
+    "You are a voice assistant. Your responses are converted to speech and read aloud, "
+    "so respond in plain spoken sentences only, as if talking out loud to someone. "
+    "Never use Markdown formatting: no asterisks, no bold or italics, no bullet points or "
+    "numbered lists, no headers, no code blocks, no horizontal rules. "
+    "Do not use abbreviations like e.g., i.e., etc., or vs. - spell them out as 'for example', "
+    "'that is', 'and so on', 'versus'. Do not use dashes, en dashes, or em dashes to join "
+    "clauses - use a full sentence or a comma instead. Do not use symbols such as #, /, or & - "
+    "say the words they stand for. Spell out numbers the way you would say them out loud."
+)
+
+ABBREVIATIONS = [
+    (r"\be\.g\.,?\s*", "for example "),
+    (r"\bi\.e\.,?\s*", "that is "),
+    (r"\betc\.", "and so on"),
+    (r"\bvs\.", "versus"),
+]
+
+def strip_markdown(text):
+    """Clean model output for TTS: strip Markdown, expand abbreviations, drop stray symbols.
+
+    Belt and suspenders alongside SYSTEM_PROMPT above — models don't follow "no formatting"
+    instructions with 100% reliability, so the pipeline can't assume they will.
+    """
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)   # **bold**
+    text = re.sub(r"\*(.*?)\*", r"\1", text)         # *italic*
+    text = re.sub(r"__(.*?)__", r"\1", text)          # __bold__
+    text = re.sub(r"_(.*?)_", r"\1", text)            # _italic_
+    text = re.sub(r"`(.*?)`", r"\1", text)            # `code`
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)  # # headers (line start)
+    text = re.sub(r"#{2,}", "", text)                  # stray ## / ### mid-line
+    text = re.sub(r"^[\*\-\+]\s+", "", text, flags=re.MULTILINE)  # bullet markers
+    text = re.sub(r"^\d+\.\s+", "", text, flags=re.MULTILINE)  # numbered list markers
+    text = re.sub(r"^-{3,}\s*$", "", text, flags=re.MULTILINE)  # --- horizontal rules
+    text = re.sub(r"\s+[-–—]{1,2}\s+", ", ", text)  # " - " / " -- " / em-dash as a clause join
+    for pattern, replacement in ABBREVIATIONS:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r"[/&]", " ", text)                  # stray slashes and ampersands
+    text = re.sub(r"[ \t]{2,}", " ", text)             # collapse extra spaces left behind
+    text = re.sub(r"\n{2,}", "\n", text)
+    return text.strip()
+
 
 print(f"Loading STT + TTS models (one-time cost, not counted per-turn)... model={OLLAMA_MODEL}")
 stt_model = WhisperModel("base.en", device="cpu", compute_type="int8")
@@ -63,7 +106,10 @@ def run_turn():
         OLLAMA_URL,
         json={
             "model": OLLAMA_MODEL,
-            "messages": [{"role": "user", "content": transcript}],
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": transcript},
+            ],
             "stream": True,
             "options": {"num_ctx": 8192},
             "keep_alive": -1,
@@ -86,8 +132,10 @@ def run_turn():
     t_llm_done = time.time()
     print(f"Assistant: {full_text}")
 
+    speech_text = strip_markdown(full_text)
+
     with wave.open("turn_output.wav", "wb") as wav_file:
-        tts_voice.synthesize_wav(full_text, wav_file)
+        tts_voice.synthesize_wav(speech_text, wav_file)
     t_tts_done = time.time()
 
     data, sr = sf.read("turn_output.wav", dtype="float32")
