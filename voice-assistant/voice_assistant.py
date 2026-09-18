@@ -20,6 +20,9 @@ THINK = False  # hybrid-reasoning models (e.g. qwen3.5:9b) generate their whole 
                # 14.4-83.6s TTFT measured in FINDINGS.md; False collapses it to ~2.4s with no
                # visible quality loss on the questions tried. Ignored by non-reasoning models
                # (e.g. qwen2.5:3b), so it's safe to leave set either way when you swap models.
+STRIP_MARKDOWN = True  # run model output through strip_markdown() (below) before TTS synthesis.
+                        # Set False to hear the model's raw output as-is, e.g. to check how much
+                        # Markdown/symbol leakage SYSTEM_PROMPT alone actually stops.
 VOICE_PATH = "en_US-lessac-medium.onnx"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 SYSTEM_PROMPT = (
@@ -132,7 +135,7 @@ def run_turn():
     t_llm_done = time.time()
     print(f"Assistant: {full_text}")
 
-    speech_text = strip_markdown(full_text)
+    speech_text = strip_markdown(full_text) if STRIP_MARKDOWN else full_text
 
     with wave.open("turn_output.wav", "wb") as wav_file:
         tts_voice.synthesize_wav(speech_text, wav_file)

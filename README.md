@@ -203,10 +203,13 @@ python -m piper.download_voices en_US-lessac-medium
 python voice-assistant/voice_assistant.py
 ```
 
-Edit the constants at the top of `voice_assistant.py` (`OLLAMA_MODEL`, `THINK`, `INPUT_DEVICE`,
-`OUTPUT_DEVICE`, `VOICE_PATH`) to match your own hardware — run
+Edit the constants at the top of `voice_assistant.py` (`OLLAMA_MODEL`, `THINK`, `STRIP_MARKDOWN`,
+`INPUT_DEVICE`, `OUTPUT_DEVICE`, `VOICE_PATH`) to match your own hardware — run
 `python -c "import sounddevice as sd; print(sd.query_devices())"` first to find your mic/speaker
-device indices.
+device indices. `SYSTEM_PROMPT` and the `ABBREVIATIONS`/`strip_markdown()` regex list just below
+it are also plain top-of-file constants if you want the model to speak differently (e.g. keep
+bullet points, add a persona) — set `STRIP_MARKDOWN = False` to hear the model's raw output
+un-cleaned and see how much of the leakage `SYSTEM_PROMPT` alone actually stops.
 
 **Three request-payload settings this script relies on, and why** (full numbers in FINDINGS.md —
 these aren't optional tuning, the script misbehaves without them):
