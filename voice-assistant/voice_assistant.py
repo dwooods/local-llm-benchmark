@@ -14,6 +14,11 @@ INPUT_DEVICE = 1   # Microphone (Webcam(X1))
 OUTPUT_DEVICE = 4  # Speakers (USB2.0 Device)
 SAMPLE_RATE = 16000
 OLLAMA_MODEL = "qwen3.5:9b"  # swap to "qwen2.5:3b" for the fast-vs-quality comparison run
+THINK = False  # hybrid-reasoning models (e.g. qwen3.5:9b) generate their whole reasoning trace
+               # silently before the first visible token — leaving this True reproduces the
+               # 14.4-83.6s TTFT measured in FINDINGS.md; False collapses it to ~2.4s with no
+               # visible quality loss on the questions tried. Ignored by non-reasoning models
+               # (e.g. qwen2.5:3b), so it's safe to leave set either way when you swap models.
 VOICE_PATH = "en_US-lessac-medium.onnx"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
@@ -62,7 +67,7 @@ def run_turn():
             "stream": True,
             "options": {"num_ctx": 8192},
             "keep_alive": -1,
-            "think": False,
+            "think": THINK,
         },
         stream=True,
     )

@@ -203,10 +203,28 @@ python -m piper.download_voices en_US-lessac-medium
 python voice-assistant/voice_assistant.py
 ```
 
-Edit the constants at the top of `voice_assistant.py` (`OLLAMA_MODEL`, `INPUT_DEVICE`,
+Edit the constants at the top of `voice_assistant.py` (`OLLAMA_MODEL`, `THINK`, `INPUT_DEVICE`,
 `OUTPUT_DEVICE`, `VOICE_PATH`) to match your own hardware — run
 `python -c "import sounddevice as sd; print(sd.query_devices())"` first to find your mic/speaker
 device indices.
+
+**Three request-payload settings this script relies on, and why** (full numbers in FINDINGS.md —
+these aren't optional tuning, the script misbehaves without them):
+
+- `"options": {"num_ctx": 8192}` — at the default 4096, a hybrid-reasoning model's invisible
+  chain-of-thought can consume the entire context budget on a non-trivial question, leaving zero
+  tokens for the actual answer. The script crashes writing an empty WAV file when this happens.
+- `"keep_alive": -1` — keeps the model resident between turns. Ollama's default 5-minute
+  `keep_alive` evicts an idle model, so without this a cold-reload penalty gets silently counted
+  as TTFT on the next turn (worse the *second* time, not better).
+- `THINK` (top of file, `True`/`False`) — the single highest-leverage latency lever found in this
+  project. For a hybrid-reasoning model like the default `qwen3.5:9b`, the full reasoning trace
+  generates silently before any visible token streams out, and Ollama's `/api/chat` doesn't expose
+  that phase as separate timing — from the outside it just looks like a broken, catastrophically
+  slow model. Measured TTFT was 14.4s-83.6s with reasoning on; setting `THINK = False` suppresses
+  the trace entirely and collapsed measured TTFT to 2.39s-2.47s, with no visible quality
+  regression on the questions tried. It's a no-op for non-reasoning models (e.g. `qwen2.5:3b`), so
+  it's safe to leave set either way when you swap `OLLAMA_MODEL`.
 
 ## Results
 
