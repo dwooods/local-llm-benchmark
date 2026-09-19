@@ -3,7 +3,8 @@
 // note at the top of promptfoo-vision-pc.yaml / promptfoo-vision-pi.yaml for why).
 //
 // Checks two things against the values you typed in as vars for each test case:
-//   1. Does the model's vendor field contain the expected vendor name (case-insensitive)?
+//   1. Does the model's vendor field contain the expected vendor name (case- and
+//      diacritic-insensitive — "Cabana" matches "Cabaña")?
 //   2. Is the model's total within 1 cent of the expected total?
 // Extend this if you want to also check `date` or specific line items — same pattern.
 
@@ -19,13 +20,14 @@ module.exports = function checkFields(output, context) {
     // literals (so quotes/braces inside item names etc. don't confuse the scan).
     // A reasoning model (minicpm-v4.6 on the Pi vision suite, Sept 19-20 2026)
     // "thinks out loud" before its real answer, and that reasoning text can
-    // itself contain JSON-looking fragments (e.g. "items are [{"item": ...}]")
-    // well before the actual final answer, and/or trailing commentary can follow
-    // the real answer. The old approach (first "{" .. last "}" in the whole
-    // string) spanned all of that and never parsed. Instead: collect every
-    // self-contained top-level object and take the LAST one that actually
-    // parses as JSON — the model's real answer is reliably the last complete
-    // object it emits, even when there's chatter before or after it.
+    // itself contain JSON-looking fragments well before the actual final answer,
+    // and/or trailing commentary can follow the real answer, and glm-ocr (PC)
+    // re-emits its complete answer a second time before hitting its token
+    // ceiling. The old approach (first "{" .. last "}" in the whole string)
+    // spanned all of that and never parsed. Instead: collect every self-
+    // contained top-level object and take the LAST one that actually parses
+    // as JSON — the model's real answer is reliably the last complete object
+    // it emits, even when there's chatter or a repeat before or after it.
     const objects = [];
     let depth = 0;
     let start = -1;
@@ -80,12 +82,25 @@ module.exports = function checkFields(output, context) {
     );
   }
 
+  // Lowercase + strip diacritics (NFD-decompose, drop combining marks) so
+  // "Cabaña"/"cabana", "café"/"cafe", etc. compare equal. A model that gets
+  // the vendor semantically right but drops an accent mark (glm-ocr and
+  // minicpm-v4.6 both did this on the same "La Cabaña" receipt, Sept 19 2026)
+  // shouldn't fail on that alone — this assertion is checking vendor
+  // identification, not diacritic transcription fidelity.
+  function normalize(str) {
+    return String(str)
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+  }
+
   try {
     const data = extractJson(output);
-    const expectedVendor = String(context.vars.expectedVendor || '').toLowerCase();
+    const expectedVendor = normalize(context.vars.expectedVendor || '');
     const expectedTotal = parseFloat(context.vars.expectedTotal);
 
-    const gotVendor = String(data.vendor || '').toLowerCase();
+    const gotVendor = normalize(data.vendor || '');
     const gotTotal = parseFloat(data.total);
 
     const vendorOk = expectedVendor.length > 0 && gotVendor.includes(expectedVendor);
