@@ -82,10 +82,12 @@ looked like real model weaknesses until traced back to the config:
 3. **A hand-injected assistant `tool_calls` turn needs `function.arguments` as a plain JSON
    object, not a JSON-encoded string — even though the OpenAI API spec documents it as a string.**
    The spec-correct string form produced a suspicious uniform 0/4 on a tool-error-recovery test,
-   including for two models with otherwise-perfect records. An isolated debug run
-   (`promptfoo-agentic-toolerror-debug.yaml`) showed the string form makes Ollama return an empty
-   completion when replaying that turn, while the object form works correctly. This only affects
-   turns you hand-build for a test, not a model's own freshly-generated tool_calls.
+   including for two models with otherwise-perfect records. An isolated debug repro showed the
+   string form makes Ollama return an empty completion when replaying that turn, while the object
+   form works correctly. This only affects turns you hand-build for a test, not a model's own
+   freshly-generated tool_calls. (The small standalone debug configs used to isolate this and the
+   other bugs above were deleted once the fixes landed and were folded into this write-up instead
+   of being kept as files.)
 
 A fourth, non-config bug worth flagging separately: **the fixed judge model (`deepseek-r1:14b`)
 produced a confirmed false-negative grade** on the coding suite — it marked a correct
@@ -373,3 +375,20 @@ against this project's own measured local numbers):
 - Phone platform: dropped from scope entirely before any device was picked or any data was
   collected. Not a gap in this repo's coverage — a deliberate decision. If phone benchmarking is
   ever revisited, it should start fresh rather than picking this back up.
+- Pi storage hasn't been pinned down (SD card vs. NVMe HAT) — matters for cold-load time (an
+  estimated ~20s on SD vs. ~2-4s on NVMe per ~2GB model) but hasn't been benchmarked directly.
+- A native llama.cpp build exists on the Pi (separate from Ollama) specifically to compare against
+  Ollama's own speed numbers above — the build is done, the actual comparison run is not.
+- The voice-assistant pipeline in this repo was only ever built and measured on the PC. It hasn't
+  been ported to or run on the Pi — the `keep_alive`/`num_ctx` findings above should carry over
+  directly, but the `think`-flag TTFT win is already confirmed *not* to generalize to at least one
+  Pi hybrid-reasoning model (`qwen3-vl:2b`, see the Pi vision section above), so the Pi's real TTFT
+  numbers are still unmeasured. Any such run also inherits the thermal risk above — it needs the
+  crash-risk mitigation, not just the active cooler, before treating a long Pi session as safe.
+- Whether `think: false` costs anything on a task that actually benefits from chain-of-thought
+  (complex coding, multi-step tool planning) is untested — every measurement behind the TTFT win
+  above was on general-knowledge/chat-shaped questions, not reasoning-heavy ones.
+- An unreconciled contradiction from the Pi vision suite: the Costa receipt hung for roughly 18.9
+  minutes without terminating on one run, then completed cleanly in 1-2 minutes on two later runs
+  at the identical model/case/config. Not blocking, but worth a targeted repeat if this case ever
+  becomes decision-relevant.

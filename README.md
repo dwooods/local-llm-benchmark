@@ -21,8 +21,6 @@ network calls to score a model (the only exception is one deliberate LAN call de
 benchmarks/                  promptfoo suites — run these to reproduce a scored suite
   promptfoo-*.yaml           PC configs (chat, coding, extraction, agentic, vision)
   promptfoo-*-pi.yaml        same four workloads, tuned for the Pi's 8GB RAM / CPU-only inference
-  promptfoo-*-debug.yaml     small isolated repros for the three promptfoo bugs found along the
-                             way (see FINDINGS.md) — kept because the bugs are the actual finding
   assertions/check-fields.js deterministic scorer used by the vision suite (no LLM judge)
   images/                    the 6 receipt/document photos used by the vision/OCR suite
   monitor.sh                 RAM/swap logger for the Pi runs (see "Pi setup" below)
