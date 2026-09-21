@@ -3,7 +3,8 @@
 Benchmarking open-weight LLMs running **entirely locally** (no cloud calls) across two very
 different pieces of hardware — a high-end Windows gaming PC and a Raspberry Pi 5 — to find, for
 each machine, the best model + settings combination across five workloads: coding assistance,
-agentic/tool use, structured data extraction (text and image/OCR), and general chat/Q&A.
+agentic/tool use, structured data extraction from text, structured data extraction from images
+(OCR/vision), and general chat/Q&A.
 
 This repo holds the actual [promptfoo](https://www.promptfoo.dev/) configs used to score every
 model, the receipt images used for the vision/OCR suite, a working local voice-assistant
@@ -35,6 +36,11 @@ voice-assistant/
                              (streamed, with real TTFT) → piper-tts (TTS), with per-stage timing
 ```
 
+Three small isolated repro configs used along the way to debug promptfoo config bugs (the `tools`-
+nesting bug, the hand-injected `tool_calls` string-vs-object bug, and a cloud-provider tool-call-
+shape check) aren't committed here — the bugs themselves, and what each repro proved, are written
+up in full in [`FINDINGS.md`](FINDINGS.md).
+
 ## Hardware this was run on
 
 | | Windows PC ("DavidPC") | Raspberry Pi 5 |
@@ -42,6 +48,7 @@ voice-assistant/
 | CPU | Intel Core i7-13700K (16C/24T) | Pi 5 SoC (CPU-only, no GPU offload) |
 | GPU | AMD Radeon RX 6700 XT, 12GB VRAM | — |
 | RAM | 128GB DDR | 8GB (7.87GB usable) |
+| Storage | NVMe SSD | NVMe HAT (confirmed — not a MicroSD card) |
 | OS | Windows 11 | Debian 13 ("trixie"), 64-bit |
 | Runtime | Ollama v0.33.2 | Ollama v0.34.1 |
 
@@ -129,6 +136,16 @@ unattended multi-hour suite on the Pi assuming a clean finish — checkpoint int
 doesn't lose already-completed test cases. Full details, including what's already been ruled out
 (power supply) and what hasn't (the actual crash trigger), are in FINDINGS.md.
 
+A kill-and-cool thermal watchdog (poll temperature, kill the running inference process, let the
+board cool before it reaches the crash zone) was built and used ad hoc during this project's
+testing — see FINDINGS.md for what it caught and where it fell short (a kill window tuned too
+aggressively for the vision suite killed normal-length cases before they could finish, and an
+early PID-based kill was defeated by process orphaning until fixed to pattern-match and
+`pkill -f` on a distinguishing config filename instead). It is **not** included in this repo as a
+reusable script — it was built and tuned once, for one specific run, not as a general-purpose
+tool. Treat the watchdog write-up in FINDINGS.md as a documented mitigation *pattern* to
+reimplement and tune for your own workload, not something you can run directly from this repo.
+
 Ollama on a fresh install does **not** set `OLLAMA_MAX_LOADED_MODELS=1` on its own, and its
 absence causes silent concurrent-model CPU thrashing on a multi-provider matrix run rather than an
 obvious error. Set it via a systemd drop-in (the `[Service]` header is required — omitting it is
@@ -186,6 +203,16 @@ empty-output-under-memory-pressure bug documented in FINDINGS.md):
 bash monitor.sh &
 ```
 
+**Not used for any scored result in this repo:** a native ARM64 build of Jan Desktop, with its own
+llama.cpp backend, was also gotten running on this Pi during the project — compiled from source,
+not the prebuilt x86_64 binary. It needed `libayatana-appindicator3-dev` for Tauri's tray-icon
+feature, a manual `vendor/llama.cpp` checkout to work around a submodule that wouldn't init
+cleanly, `-mno-outline-atomics`/`-latomic`/`-lgcc` compile flags to work around the default GCC
+toolchain's ARM v8.1+ LSE-atomics handling, and a manual copy of the compiled `libggml*.so` files
+into `resources/bin/` (they aren't copied there automatically). Everything actually scored in this
+repo runs against Ollama; the llama.cpp-vs-Ollama head-to-head speed comparison that build would
+enable was never run — see FINDINGS.md open items.
+
 ## Vision suite setup (both machines)
 
 The vision configs (`promptfoo-vision-pc.yaml`, `promptfoo-vision-pi.yaml`) reference
@@ -214,7 +241,8 @@ time, not shorter.
 Two of the six receipts are worth knowing about before you eyeball results: the "La Cabaña"
 receipt prints two totals (card $57.71 / cash $55.49 — ground truth here uses the card total), and
 the "Costa" receipt is priced in EUR and has a pre-tax subtotal printed alongside the VAT-inclusive
-total (see FINDINGS.md for what every model tested actually did with that ambiguity).
+total (see FINDINGS.md for what every model tested actually did with that ambiguity, and for a
+separate, unreconciled non-termination anomaly specific to this receipt on the Pi).
 
 ## Voice assistant
 

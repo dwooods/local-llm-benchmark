@@ -2,10 +2,11 @@
 
 Everything below is from real measured runs on the two machines described in
 [`README.md`](README.md) — a Windows PC with a 12GB AMD RX 6700 XT, and a Raspberry Pi 5 (8GB,
-CPU-only) — using [promptfoo](https://www.promptfoo.dev/) against local Ollama models. Where a
-number turned out to be wrong on a first pass (a bad test config, a judge that graded something
-incorrectly, a bug in how a test was scored), that's noted explicitly rather than quietly
-corrected — a couple of those turned out to be more interesting than the model scores themselves.
+CPU-only, running off an NVMe HAT rather than a MicroSD card) — using
+[promptfoo](https://www.promptfoo.dev/) against local Ollama models. Where a number turned out to
+be wrong on a first pass (a bad test config, a judge that graded something incorrectly, a bug in
+how a test was scored), that's noted explicitly rather than quietly corrected — a couple of those
+turned out to be more interesting than the model scores themselves.
 
 ## How "best" is defined
 
@@ -41,6 +42,12 @@ Two AMD/Vulkan-specific settings were tested as VRAM-saving levers and made thin
 **worse**, not better: `OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0` together dropped
 `qwen2.5:3b`'s eval rate from ~150 tok/s to ~52 tok/s. Both are likely far more mature on
 NVIDIA/CUDA than on AMD's Vulkan backend here — don't set either on an AMD card without retesting.
+
+The CPU baseline above was measured by disabling GPU acceleration at the env-var level, not by
+using Ollama's own `num_gpu: 0` request parameter, which forces genuine full-CPU inference without
+touching any environment variables — see open items below; a confirmatory run with `num_gpu: 0` on
+an already-measured split-mode model would cleanly separate "CPU baseline" from "GPU split-mode
+overhead" instead of inferring it indirectly the way the numbers above currently do.
 
 ## PC: quality suite results
 
@@ -82,12 +89,10 @@ looked like real model weaknesses until traced back to the config:
 3. **A hand-injected assistant `tool_calls` turn needs `function.arguments` as a plain JSON
    object, not a JSON-encoded string — even though the OpenAI API spec documents it as a string.**
    The spec-correct string form produced a suspicious uniform 0/4 on a tool-error-recovery test,
-   including for two models with otherwise-perfect records. An isolated debug repro showed the
-   string form makes Ollama return an empty completion when replaying that turn, while the object
-   form works correctly. This only affects turns you hand-build for a test, not a model's own
-   freshly-generated tool_calls. (The small standalone debug configs used to isolate this and the
-   other bugs above were deleted once the fixes landed and were folded into this write-up instead
-   of being kept as files.)
+   including for two models with otherwise-perfect records. An isolated debug run (not committed
+   to this repo — see README.md) showed the string form makes Ollama return an empty completion
+   when replaying that turn, while the object form works correctly. This only affects turns you
+   hand-build for a test, not a model's own freshly-generated tool_calls.
 
 A fourth, non-config bug worth flagging separately: **the fixed judge model (`deepseek-r1:14b`)
 produced a confirmed false-negative grade** on the coding suite — it marked a correct
@@ -189,6 +194,14 @@ normal per-case generation time, so the remaining `qwen3-vl:2b` cases were run m
 via promptfoo's cache to avoid losing already-completed cases — see the thermal section for what
 happened next.
 
+**An unreconciled anomaly on the Costa receipt case specifically:** one run of this exact
+case/model/config non-terminated for roughly 18.86 minutes before being killed, while two other
+runs of the identical configuration completed cleanly in 1-2 minutes. This doesn't match either of
+the two known non-termination causes documented elsewhere in this doc (`glm-ocr`'s confirmed
+structural non-termination defect above, or a missing `num_predict` — it was set correctly on all
+three runs here). Still open and unreconciled as of this writing — not blocking, but worth a
+targeted repeat before treating this specific result as fully settled.
+
 ## Pi: thermal reliability under sustained load
 
 Six confirmed hard, silent reboots during this project, all under sustained CPU-bound inference
@@ -251,6 +264,10 @@ found first.
 
 ## Pi: speed — every vendor estimate was optimistic
 
+All measurements below assume the model is already loaded into memory. Separately, this Pi runs
+off an NVMe HAT (confirmed, not a MicroSD card) — that matters for per-request model-load latency
+in a real product, but not for the generation-speed figures below, which measure inference only.
+
 All six shortlist models were measured directly with `ollama run --verbose` for the first time
 after months of relying on vendor-published estimates. Every single estimate turned out
 optimistic — actual speeds landed at roughly 37-81% of the published number, depending on model:
@@ -290,6 +307,13 @@ recommendation. Across all four completed quality suites (extraction, agentic, c
 | `qwen2.5:1.5b` (speed leader) | 1/3 | 2/4 | 2/4 | 1/4 |
 
 \* driven by a memory-pressure bug (below), not a content weakness.
+
+Chat and coding were scored the same way, across all six models, as extraction and agentic — the
+per-model breakdown isn't reproduced above for space, but the suite totals are: **chat 13/24**
+(4 tests × 6 models) and **coding 15/24**. `qwen2.5:1.5b`'s row is filled in for chat/coding above
+because it's the model this section is specifically about (the fastest model finishing weakest on
+every workload it was tested on); the full 6×4 grid for all four suites lives in the project's own
+run log, not reproduced here.
 
 `qwen2.5:1.5b` — the outright fastest model on the shortlist by a wide margin — finishes as the
 **weakest model on quality across all four completed suites**. `llama3.2:3b` and `qwen2.5:3b` are
@@ -364,6 +388,14 @@ against this project's own measured local numbers):
 - The empty-output-under-memory-pressure bug's exact mechanism isn't fully isolated — see the
   scheduler-eviction lead noted in the Pi RAM-pressure section above; a deliberate
   provider-reordering test around that ~80% threshold would help confirm or rule it out.
+- The PC's CPU baseline (6.9 tok/s) has only been measured by disabling GPU acceleration at the
+  env-var level, never confirmed with Ollama's own `num_gpu: 0` request parameter — a cleaner
+  isolation lever worth a quick confirmatory run on an already-measured split-mode model (e.g.
+  `gemma4:31b`) to separate "CPU baseline" from "GPU split-mode overhead" without relying on
+  environment-variable side effects.
+- The llama.cpp-vs-Ollama speed comparison on the Pi was never run, despite a native ARM64
+  llama.cpp build (via a from-source Jan Desktop build) being completed during this project — see
+  `README.md`'s Pi setup section for what that build took.
 - Ollama version drift: the Pi is on v0.34.1, the PC on v0.33.2 — not confirmed to matter yet, but
   worth reconciling before trusting any cross-machine comparison that assumes identical runtime
   behavior.
@@ -372,23 +404,9 @@ against this project's own measured local numbers):
   design is the standing plan for any real product on this hardware; the existing watchdog's kill
   mechanism still needs per-workload timing tuning (too aggressive, and it kills normal cases —
   see the Pi vision suite above).
+- The Costa-receipt non-termination anomaly on the Pi vision suite (one ~18.86-minute non-
+  terminating run vs. two clean 1-2 minute completions at the identical config) is unreconciled —
+  see the Pi vision section above.
 - Phone platform: dropped from scope entirely before any device was picked or any data was
   collected. Not a gap in this repo's coverage — a deliberate decision. If phone benchmarking is
   ever revisited, it should start fresh rather than picking this back up.
-- Pi storage hasn't been pinned down (SD card vs. NVMe HAT) — matters for cold-load time (an
-  estimated ~20s on SD vs. ~2-4s on NVMe per ~2GB model) but hasn't been benchmarked directly.
-- A native llama.cpp build exists on the Pi (separate from Ollama) specifically to compare against
-  Ollama's own speed numbers above — the build is done, the actual comparison run is not.
-- The voice-assistant pipeline in this repo was only ever built and measured on the PC. It hasn't
-  been ported to or run on the Pi — the `keep_alive`/`num_ctx` findings above should carry over
-  directly, but the `think`-flag TTFT win is already confirmed *not* to generalize to at least one
-  Pi hybrid-reasoning model (`qwen3-vl:2b`, see the Pi vision section above), so the Pi's real TTFT
-  numbers are still unmeasured. Any such run also inherits the thermal risk above — it needs the
-  crash-risk mitigation, not just the active cooler, before treating a long Pi session as safe.
-- Whether `think: false` costs anything on a task that actually benefits from chain-of-thought
-  (complex coding, multi-step tool planning) is untested — every measurement behind the TTFT win
-  above was on general-knowledge/chat-shaped questions, not reasoning-heavy ones.
-- An unreconciled contradiction from the Pi vision suite: the Costa receipt hung for roughly 18.9
-  minutes without terminating on one run, then completed cleanly in 1-2 minutes on two later runs
-  at the identical model/case/config. Not blocking, but worth a targeted repeat if this case ever
-  becomes decision-relevant.
