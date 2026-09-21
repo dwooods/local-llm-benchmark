@@ -50,7 +50,7 @@ NVIDIA/CUDA than on AMD's Vulkan backend here — don't set either on an AMD car
 | **Structured extraction** | `qwen2.5:latest`, `qwen3.5:9b`, `gemma4:12b` scored **8/9**. The one failure (`qwen2.5:latest`) was a genuine instruction-adherence gap — hallucinated trailing text after otherwise-correct JSON broke a strict JSON-only contract, not a data-accuracy problem. |
 | **Agentic/tool use** | `qwen3.5:9b` and `qwen2.5:latest` both went a clean **4/4**. `llama3:latest` went **0/4** — complete empty-output failures on every test, not a transport issue. `qwen2.5-coder:14b` — this project's original "top pick for agentic coding" per general guidance — scored only **1/4**; a debug run found the model doesn't reliably populate Ollama's native `tool_calls` API field at all, it just prints a JSON-lookalike blob as plain text. That's a deeper problem than a formatting quirk: a real downstream tool-calling integration would never see it as an executable call. |
 | **Coding** | `qwen2.5-coder:7b`, `qwen2.5-coder:14b`, `deepseek-coder-v2:16b`, `gemma4:12b` scored a corrected **16/16 (100%)** — see bug #3 below for why the first pass showed a failure that wasn't real. |
-| **Vision/OCR** | See its own section below — this workload had the most methodology surprises of the five. |
+| **Vision/OCR** | See its own section below — this workload had the most methodology surprises of the five, and is the only one run on both machines. |
 
 Across every real (non-placeholder) test in every suite it entered, `qwen3.5:9b` came out as the
 single most consistently reliable model on this rig — which also happens to match its role as the
@@ -95,14 +95,40 @@ than the three above, because it sits quietly inside an otherwise-clean run inst
 obviously-broken uniform result — worth spot-checking judge-graded runs, not just trusting the
 aggregate score.
 
-**A fifth, separate gotcha: promptfoo caches responses to disk across separate CLI invocations,
+A fifth, separate gotcha: **promptfoo caches responses to disk across separate CLI invocations,
 not just within one `eval` run.** Re-running the exact same command with no config changes does
 NOT re-query the model — it silently replays the cached response, even minutes later in a totally
 separate process. The tell is a suspiciously fast run (~1 second instead of several minutes) and
 output that matches a previous run character-for-character. Always append `--no-cache` when the
 point of a rerun is to check reproducibility.
 
-## Vision/OCR suite: `glm-ocr` vs. `qwen3-vl:8b`
+**Update on the caching gotcha:** `--no-cache` only suppresses cache *reads*, not cache *writes* —
+a run launched with `--no-cache` still writes its successful responses to the cache as normal, so a
+later invocation that omits the flag can silently replay a result that was originally generated
+under a `--no-cache` run. Separately, error responses (a 4xx, or a 200 with an embedded error
+payload) are never cached regardless of flag state — a failed test's retry always re-queries live,
+so a suspiciously-fast rerun after a real fix is a legitimate signal, not a cache artifact to
+distrust.
+
+**A sixth gotcha, found while building the vision suite's custom scorer
+(`assertions/check-fields.js`):** a hand-written JSON extractor that just takes "first `{` to last
+`}`" breaks the moment a model reasons out loud before answering, or re-emits its complete answer
+instead of stopping (see `glm-ocr`'s non-termination defect below) — either one puts more than one
+JSON object in the output and the naive slice grabs garbage. Fix: scan for every complete,
+brace-balanced top-level `{...}` object in the output, then try parsing from the *last* one found
+backward until one succeeds. Separately, normalize vendor-name strings with Unicode NFD
+decomposition and strip combining marks before doing a substring match — an OCR'd accent drop
+(e.g. "La Cabaña" → "La Cabana") otherwise scores as a wrong vendor, and this was seen
+independently on two different models on two different platforms for the same receipt.
+
+**A seventh, infrastructure-adjacent gotcha:** a naive PID-based kill/watchdog script can be
+defeated by process orphaning. `npx`-launched processes (e.g. `promptfoo`) can spawn children
+(e.g. `llama-server`) that outlive a `kill` sent to the captured launcher PID. If you're building
+a watchdog for a long-running suite — the Pi's thermal risk below is exactly the situation that
+calls for one — track and kill by pattern-matching the invocation (`pgrep -f`/`pkill -f` on a
+distinguishing config filename) instead of trusting a single captured PID.
+
+## Vision/OCR suite — PC: `glm-ocr` vs. `qwen3-vl:8b`
 
 This suite deliberately uses a deterministic `javascript` assertion instead of an LLM judge —
 receipt ground truth is objective, so there's no reason to introduce judge-model error into
@@ -120,15 +146,18 @@ each tuned for what their workload actually needs.
 exact token ceiling on all 6/6 test cases at both 4096 and 8192 tokens — always by re-emitting its
 own already-complete JSON answer instead of stopping. Doubling the context didn't fix it, it just
 let the repetition loop run twice as long (proportionally similar completion-token counts at both
-settings). This is a real reliability finding about the model, not a config bug — a downstream
-integration using `glm-ocr` needs either a stop-sequence workaround or a different model.
+settings). Confirmed stable across three separate runs — this is a real reliability finding about
+the model, not a one-off or a config bug — a downstream integration using `glm-ocr` needs either a
+stop-sequence workaround or a different model.
 
-**Final scores, `num_ctx: 8192` (the trustworthy run):**
+**Final scores, `num_ctx: 8192` (the trustworthy run — scoring corrected after an initial pass
+mis-weighted the non-termination cases; the corrected numbers below supersede an earlier
+3/6-raw / 4.5-of-6-weighted result for `glm-ocr`):**
 
 | Model | Raw score | Weighted score | Notes |
 |---|---|---|---|
 | `qwen3-vl:8b` | 5/6 (83%) | 5.5/6 (92%) | Best result on the vision suite |
-| `glm-ocr` | 3/6 (50%) | 4.5/6 (75%) | Non-termination defect above; also the OCR-specialist model, arguably should have won this on data-accuracy alone |
+| `glm-ocr` | 4/6 (67%) | 5/6 (83%) | Non-termination defect above (confirmed stable across three runs) plus a Home Depot vendor-mis-extraction; closer to `qwen3-vl:8b` after the scoring correction than the original run suggested, but still behind it — and the non-termination defect is a real integration blocker independent of raw accuracy |
 
 **The VAT/net-vs-gross ambiguity (a durable, non-fixable-by-prompt-wording finding):** the Costa
 coffee receipt has both a pre-tax subtotal (€4.24) and a VAT-inclusive grand total (€5.00). Both
@@ -137,6 +166,86 @@ schema's `total` field was explicitly reworded to specify "the final amount actu
 including any tax, VAT, or service charge — not a pre-tax subtotal." Consistent enough across two
 models and two runs to log as a genuine small-local-vision-model limitation on multi-total
 receipts, not something worth another prompt-wording iteration.
+
+## Vision/OCR suite — Pi: `qwen3-vl:2b` vs. `minicpm-v4.6`
+
+Run and closed separately from the PC suite above, same receipts/ground truth, restricted to the
+two Pi-scale vision models in the shortlist (`minicpm-v4.6` and `qwen3-vl:2b` — see `README.md`).
+
+| Model | Raw score | Notes |
+|---|---|---|
+| `minicpm-v4.6` | 11/12 (92%) | Best Pi vision result — an interrupted partial run's number, accepted as final rather than re-run clean |
+| `qwen3-vl:2b` | 4/6 (67%) | Costa and Home Depot receipts failed, the other four passed |
+
+Two things specific to this suite, not the PC one. First, `qwen3-vl:2b`'s `think: false` setting
+reaches Ollama correctly but has **no effect** — the model writes its reasoning into the visible
+answer regardless of the flag. Don't assume the think-flag TTFT lever documented in the
+local-vs-cloud section below applies universally; it's confirmed model-specific. Second, running
+this suite is what produced the sixth Pi hard crash logged in the thermal section below: a
+kill-and-cool watchdog was built for it, but its kill window turned out shorter than the model's
+normal per-case generation time, so the remaining `qwen3-vl:2b` cases were run manually instead,
+via promptfoo's cache to avoid losing already-completed cases — see the thermal section for what
+happened next.
+
+## Pi: thermal reliability under sustained load
+
+Six confirmed hard, silent reboots during this project, all under sustained CPU-bound inference
+(both multi-model and single-model workloads), all with the official Raspberry Pi Active Cooler
+physically installed and its fan confirmed running. **Active cooling is necessary but not
+sufficient** — this is the single biggest caveat in this repo for anyone planning to run these Pi
+suites unattended, or to ship a product on this hardware.
+
+Two crash signatures were observed: fast uncaught temperature spikes (~1 minute from onset to
+reset) and a slower throttle-engage/recover cycle before an eventual reset. The power supply was
+ruled out as a cause via `vcgencmd pmic_read_adc` — every voltage rail read stable through every
+crash. The board also survived one run that peaked at 80.7°C without crashing, so crash risk in
+the 79–86°C range looks probabilistic, not a fixed trip point — and `vcgencmd get_throttled`
+reading `0x0` is **not** reliable evidence nothing is wrong: several crashes here read `0x0` right
+up to the reset, because the temperature climb outran the firmware's own reaction time.
+
+**Practical rule:** treat every sustained CPU-pegged Pi run as being at real, un-mitigated,
+probabilistic risk of an unannounced hard crash, regardless of cooler state. What actually
+distinguishes a crash from a clean run at the same workload is still unidentified. A kill-and-cool
+thermal watchdog is a real, working mitigation for triggering an early shutdown before the crash
+zone — but its kill window needs to be tuned per workload; too short, and it kills a normal case
+before it can finish (see the Pi vision suite above), which is its own kind of lost data. A more
+aggressive or replacement physical cooler was considered and declined as a fix — the standing plan
+for any real product on this hardware is an application-level watchdog/auto-restart designed
+around the crash risk, not a cooling upgrade meant to eliminate it.
+
+## Long-context degradation (needle-in-a-haystack)
+
+`needle_test.py` inserts one exact-match "needle" fact (an override code) at a controlled depth
+inside a haystack of unrelated filler sentences, asks `qwen3.5:9b` to recall it, and sweeps both
+haystack length and needle depth. Scoring is a deterministic substring match, not an LLM judge —
+this project already has one confirmed false-negative judge grade (see the fourth bug above), and
+exact-string recall doesn't need a second model's opinion. Results are in `needle_results.csv`
+(two full runs, 45 cells total).
+
+**Recall itself never degraded:** the needle was found in every single cell tested — every
+context size from 1,024 to 32,768 tokens, at every depth fraction from 0% to 100%, across both
+runs. For this model, on this task, "lost in the middle" simply didn't happen inside the range
+tested.
+
+**But speed degrades sharply and predictably as context grows**, independent of recall quality —
+this is a second, distinct TTFT driver from the `think`-flag finding in the local-vs-cloud section
+below, and it doesn't require a hybrid-reasoning model to show up:
+
+| Context (tokens) | Prefill speed | Generation speed | TTFT |
+|---|---|---|---|
+| 1,024 | ~655 tok/s | ~61-62 tok/s | ~3.7-3.9s |
+| 4,096 | ~625-630 tok/s | ~60 tok/s | ~8.4-8.6s |
+| 8,192 | ~400-470 tok/s | ~33-40 tok/s | ~18.6-23.4s |
+| 16,384 | ~276-277 tok/s | ~17.1-17.9 tok/s | ~57.7-62.0s |
+| 32,768 | ~203-204 tok/s | ~11.5-11.8 tok/s | ~152-158s |
+
+VRAM stayed comfortable throughout (5.4GB at 1,024 tokens up to 6.6GB at 32,768, all `100% GPU`
+per `ollama ps`) — this isn't a VRAM-cliff story, it's pure prefill-cost scaling. The practical
+implication: a conversational product that dutifully sets `think: false` and keeps growing
+conversation history can still see multi-second-to-multi-minute TTFT purely from accumulated
+context length, with no reasoning trace involved at all. The two TTFT levers (reasoning on/off,
+and total context size) are separate and both need budgeting for, not just the one this project
+found first.
 
 ## Pi: speed — every vendor estimate was optimistic
 
@@ -207,6 +316,12 @@ silent empty-output failures unrelated to any individual model's actual capabili
 single-fixed-model deployment (the realistic product pattern) doesn't hit this specific failure
 mode, but the underlying constraint — Pi RAM, not VRAM — is still the thing to design around.
 
+**Update — a possible mechanism:** Ollama's scheduler evicts a loaded model once a new model's
+predicted VRAM/RAM need crosses a `requireFull`-triggered ~80% of available memory. That threshold
+crossing, not pure timing, may be what determines whether a given request lands on an evicted
+model and comes back empty — worth checking against the specific cases logged here before treating
+this mechanism as fully confirmed. Still listed as an open item below.
+
 Separately, `OLLAMA_MAX_LOADED_MODELS=1` turned out to be a **required Pi setting**, not just a PC
 one. A fresh Ollama reinstall doesn't set it automatically, and its absence caused a genuine hard
 stall (two models loaded simultaneously, 2-3 `llama-server` processes pinned near 99% CPU across
@@ -225,21 +340,36 @@ against this project's own measured local numbers):
 - **Marginal cost:** local electricity-only cost per 1M output tokens (~320W system draw,
   $0.16/kWh) runs $0.10 (`qwen2.5:3b`) to $1.71 (`deepseek-r1:14b`) vs. $2-15 for cloud API list
   price — 10-100x cheaper on marginal cost alone, before the hardware's sunk cost even enters it.
-- **TTFT:** Claude 4.5 Sonnet answers in 1.43s; GPT-5 and GPT-5 mini in "high" reasoning mode
-  take 64-110s to first token — cloud's TTFT advantage is real for some models and inverts hard
-  for others. The PC voice assistant in this repo exists specifically to get a *real* measured
-  local TTFT number instead of a derived estimate, closing a gap this project had flagged early on.
-- **Quality:** deliberately left uncompared here — no cloud model has been run through this
-  project's own promptfoo suites, so there's still no apples-to-apples local-vs-cloud quality
-  data, only the local-only scores above.
+- **TTFT:** Claude 4.5 Sonnet answers in 1.43s; GPT-5 and GPT-5 mini in "high" reasoning mode take
+  64-110s to first token. The comparable *measured* local number, from the voice-assistant build
+  in this repo: `qwen3.5:9b` with `think: false` hits 2.39s-2.47s TTFT — competitive with Claude's
+  cloud number and nowhere near GPT-5's high-reasoning tail. With reasoning left on (Ollama's
+  default), the same model measures 14.4s-83.6s — worse than every cloud model checked here,
+  including GPT-5's high-reasoning mode at the low end of its own range. The `think` flag is not a
+  minor tuning knob for a hybrid-reasoning model on this hardware; it's the difference between
+  beating Claude's TTFT and having the worst number in the whole comparison. It's also not a
+  universal lever — see the Pi vision suite above, where the same flag has no effect on a
+  different model. Separately, the needle-in-haystack section above shows a second, independent
+  TTFT driver (raw context size) that applies even with `think: false` set correctly.
+- **Quality:** a rigorous version of this (running this project's own promptfoo suites against
+  real cloud APIs) was scoped and then explicitly declined over API cost — permanently out of
+  scope, not a pending item. The comparison above is speed/cost/TTFT only; there is still no
+  apples-to-apples local-vs-cloud *quality* data anywhere in this repo, only the local-only scores
+  in the sections above.
 
 ## Open items
 
-- Phone platform: zero benchmark data of any kind as of this write-up — app/model research only.
-- The empty-output-under-memory-pressure bug's exact mechanism (timing? specific call content?)
-  isn't isolated — a deliberate provider-reordering test would help narrow it down.
-- Vision suite has only been run once at the corrected `num_ctx`; a second pass to confirm
-  `glm-ocr`'s non-termination behavior is stable (not a one-off) would strengthen that finding.
+- The empty-output-under-memory-pressure bug's exact mechanism isn't fully isolated — see the
+  scheduler-eviction lead noted in the Pi RAM-pressure section above; a deliberate
+  provider-reordering test around that ~80% threshold would help confirm or rule it out.
 - Ollama version drift: the Pi is on v0.34.1, the PC on v0.33.2 — not confirmed to matter yet, but
   worth reconciling before trusting any cross-machine comparison that assumes identical runtime
   behavior.
+- Pi thermal reliability under sustained load is **not resolved** — six confirmed hard crashes,
+  cause of crash-vs-clean-run still unidentified. An application-level watchdog/auto-restart
+  design is the standing plan for any real product on this hardware; the existing watchdog's kill
+  mechanism still needs per-workload timing tuning (too aggressive, and it kills normal cases —
+  see the Pi vision suite above).
+- Phone platform: dropped from scope entirely before any device was picked or any data was
+  collected. Not a gap in this repo's coverage — a deliberate decision. If phone benchmarking is
+  ever revisited, it should start fresh rather than picking this back up.

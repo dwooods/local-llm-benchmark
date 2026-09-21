@@ -18,16 +18,22 @@
 #    keep both yamls' test cases in sync so PC vs. Pi is a fair comparison on the same documents.
 # 6. Run: npx promptfoo@latest eval -c promptfoo-vision-pi.yaml -j 1 --no-cache
 #    View: npx promptfoo@latest view
+#
+# num_predict is set explicitly below (required, not optional) — a vision model without a
+# reliable EOS token can otherwise run all the way to the num_ctx ceiling before stopping,
+# turning one stuck test case into a many-minutes-long hang at Pi CPU speeds. See FINDINGS.md.
 
 providers:
   - id: ollama:chat:minicpm-v4.6
     config:
       temperature: 0
       num_ctx: 8192
+      num_predict: 4096
   - id: ollama:chat:qwen3-vl:2b
     config:
       temperature: 0
       num_ctx: 8192
+      num_predict: 4096
 
 prompts:
   - |
