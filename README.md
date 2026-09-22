@@ -53,13 +53,13 @@ up in full in [`FINDINGS.md`](FINDINGS.md).
 | RAM | 128GB DDR | 8GB (7.87GB usable) |
 | Storage | NVMe SSD | NVMe HAT (confirmed — not a MicroSD card) |
 | OS | Windows 11 | Debian 13 ("trixie"), 64-bit |
-| Runtime | Ollama v0.33.2 | Ollama v0.34.1 |
+| Runtime | Ollama v0.34.1 (updated from v0.33.2 partway through; most runs on v0.34.1) | Ollama v0.34.1 |
 
 The PC is the primary inference engine (12GB VRAM is the binding constraint — see FINDINGS.md for
 the "12GB cliff" data); the Pi is CPU-only and memory-bandwidth-bound, representing the
-"embedded/offline" end of the spectrum. The two runtimes have drifted a minor version apart — not
-confirmed to matter, but worth reconciling before trusting a cross-machine comparison that assumes
-identical behavior (see FINDINGS.md open items).
+"embedded/offline" end of the spectrum. The PC was updated from v0.33.2 to v0.34.1 partway
+through the project; most PC runs, and every Pi run, were on v0.34.1, so the cross-machine numbers
+are on the same runtime version (see FINDINGS.md open items for the caveat on the earliest PC runs).
 
 ## Prerequisites (both machines)
 
@@ -88,6 +88,13 @@ ollama run qwen2.5:3b --verbose "hi"
 
 Expect roughly 140-150 tok/s eval rate. If you see ~50 tok/s or ~7 tok/s instead, the GPU isn't
 being used — recheck the env vars and the AMD driver (`Adrenalin Edition → Check for Updates`).
+
+**A note on `HSA_OVERRIDE_GFX_VERSION` specifically:** it's a ROCm/HSA runtime variable, and this
+rig's Ollama server log shows the card loading under `library=Vulkan`, not ROCm/HIP — so on this
+setup it is most likely a no-op. The four variables were set as a bundle and verified only by the
+before/after tok/s jump; which one (or the Ollama restart itself) actually fixed the silent CPU
+fallback was never isolated. Check `library=` in your own server log before crediting any one of
+them — see FINDINGS.md.
 
 **Also confirm these are NOT set:** `OLLAMA_FLASH_ATTENTION` and `OLLAMA_KV_CACHE_TYPE`. Both were
 tested here as VRAM-saving levers and instead dropped `qwen2.5:3b`'s eval rate from ~150 tok/s to
