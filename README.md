@@ -52,7 +52,7 @@ up in full in [`FINDINGS.md`](FINDINGS.md).
 | GPU | AMD Radeon RX 6700 XT, 12GB VRAM | — |
 | RAM | 128GB DDR | 8GB (7.87GB usable) |
 | Storage | NVMe SSD | NVMe HAT (confirmed — not a MicroSD card) |
-| OS | Windows 11 | Debian 13 ("trixie"), 64-bit |
+| OS | Windows 11 | Raspberry Pi OS (Debian 13 "trixie"), 64-bit |
 | Runtime | Ollama v0.34.1 (updated from v0.33.2 partway through; most runs on v0.34.1) | Ollama v0.34.1 |
 
 The PC is the primary inference engine (12GB VRAM is the binding constraint — see FINDINGS.md for
