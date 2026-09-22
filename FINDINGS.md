@@ -192,7 +192,9 @@ this suite is what produced the sixth Pi hard crash logged in the thermal sectio
 kill-and-cool watchdog was built for it, but its kill window turned out shorter than the model's
 normal per-case generation time, so the remaining `qwen3-vl:2b` cases were run manually instead,
 via promptfoo's cache to avoid losing already-completed cases — see the thermal section for what
-happened next.
+happened next. It's also the same pairing — `minicpm-v4.6` followed by `qwen3-vl:2b` in the same
+suite — that a later instrumented reproduction used to catch a crash with full telemetry; see the
+thermal section below.
 
 **An unreconciled anomaly on the Costa receipt case specifically:** one run of this exact
 case/model/config non-terminated for roughly 18.86 minutes before being killed, while two other
@@ -214,19 +216,50 @@ Two crash signatures were observed: fast uncaught temperature spikes (~1 minute 
 reset) and a slower throttle-engage/recover cycle before an eventual reset. The power supply was
 ruled out as a cause via `vcgencmd pmic_read_adc` — every voltage rail read stable through every
 crash. The board also survived one run that peaked at 80.7°C without crashing, so crash risk in
-the 79–86°C range looks probabilistic, not a fixed trip point — and `vcgencmd get_throttled`
-reading `0x0` is **not** reliable evidence nothing is wrong: several crashes here read `0x0` right
-up to the reset, because the temperature climb outran the firmware's own reaction time.
+the 79–86°C range initially looked probabilistic, not a fixed trip point — and
+`vcgencmd get_throttled` reading `0x0` is **not** reliable evidence nothing is wrong: several
+crashes here read `0x0` right up to the reset, because the temperature climb outran the firmware's
+own reaction time.
 
-**Practical rule:** treat every sustained CPU-pegged Pi run as being at real, un-mitigated,
-probabilistic risk of an unannounced hard crash, regardless of cooler state. What actually
-distinguishes a crash from a clean run at the same workload is still unidentified. A kill-and-cool
-thermal watchdog is a real, working mitigation for triggering an early shutdown before the crash
-zone — but its kill window needs to be tuned per workload; too short, and it kills a normal case
-before it can finish (see the Pi vision suite above), which is its own kind of lost data. A more
-aggressive or replacement physical cooler was considered and declined as a fix — the standing plan
-for any real product on this hardware is an application-level watchdog/auto-restart designed
-around the crash risk, not a cooling upgrade meant to eliminate it.
+**Update — the mechanism, from a 1Hz instrumented reproduction (`benchmarks/pi-crash-capture/`):**
+built a logger (`pi_thermal_log.py`) that samples `vcgencmd measure_temp`, `get_throttled`, every
+PMIC rail, CPU clock, and fan RPM once a second and `fsync`s every row to disk — necessary because
+Raspberry Pi OS keeps its journal in RAM by default, so nothing about a crash moment survives a
+hard reset otherwise (`journalctl -b -1` after a reset here returned "no persistent journal was
+found"). Reran the Pi vision suite and reproduced a crash on the first attempt, with the full 29
+seconds before the reset captured (`thermal.csv`, `boot_id b8f8132e`).
+
+The result: this isn't probabilistic. `minicpm-v4.6` ran first and held steady indefinitely — about
+6.8A into the SoC (~67°C, fan at 6,400 RPM) for a minute and a half, no issue. When the suite
+swapped to `qwen3-vl:2b`, the SoC went from 60°C to 80°C in 6 seconds and settled at about 11.5A
+(~12W), with the fan pinned at its 8,774 RPM ceiling and the firmware's soft-temperature-limit flag
+flapping on and off for 11 of the last 24 seconds. The board reset 29 seconds after the model swap,
+peak 84.5°C. Rails stayed flat throughout (5V input 4.97-5.32V against a 4.63V under-voltage trip;
+VDD_CORE about 1.0V) — including through a *higher* current peak, 15.2A, from `minicpm-v4.6`'s own
+load spike earlier in the run, which the board survived without issue. So it isn't a current spike
+and it isn't the power supply: it's `qwen3-vl:2b` holding roughly 12W sustained for half a minute,
+against a cooler that this data shows holds about 7W indefinitely and does not hold about 12W.
+Which of two same-tier models is the 12W one is not something the model card tells you — it has to
+be measured, the way this logger measured it.
+
+Two items this reproduction leaves open rather than resolves: the kernel reported CPU clock at a
+flat 3000MHz through every second the soft limit was set, which is either the throttle
+reaction-time gap made visible as one number, or a stale `scaling_cur_freq` read that doesn't
+reflect what the firmware actually did — sampling `vcgencmd measure_clock arm` directly is the next
+test. And this specific reproduction is a single instrumented run, not a sweep across many
+models/loads, so treat "the cooler's real ceiling sits between ~7W and ~12W" as a bracket from one
+data point, not a precisely measured threshold.
+
+**Practical rule (updated):** treat every sustained CPU-pegged Pi run as being at real risk of an
+unannounced hard crash whenever the model's *sustained* power draw is unknown — it is no longer
+accurate to call this purely probabilistic, but per-model power draw isn't published anywhere and
+has to be measured per model before trusting a multi-hour unattended run. A kill-and-cool thermal
+watchdog is a real, working mitigation for triggering an early shutdown before the crash zone — but
+its kill window needs to be tuned per workload; too short, and it kills a normal case before it can
+finish (see the Pi vision suite above), which is its own kind of lost data. A more aggressive or
+replacement physical cooler was considered and declined as a fix — the standing plan for any real
+product on this hardware is an application-level watchdog/auto-restart designed around per-model
+measured power draw, not a cooling upgrade meant to eliminate the risk generically.
 
 ## Long-context degradation (needle-in-a-haystack)
 
@@ -399,11 +432,18 @@ against this project's own measured local numbers):
 - Ollama version drift: the Pi is on v0.34.1, the PC on v0.33.2 — not confirmed to matter yet, but
   worth reconciling before trusting any cross-machine comparison that assumes identical runtime
   behavior.
-- Pi thermal reliability under sustained load is **not resolved** — six confirmed hard crashes,
-  cause of crash-vs-clean-run still unidentified. An application-level watchdog/auto-restart
-  design is the standing plan for any real product on this hardware; the existing watchdog's kill
-  mechanism still needs per-workload timing tuning (too aggressive, and it kills normal cases —
-  see the Pi vision suite above).
+- Pi thermal reliability under sustained load: the root mechanism is now identified (sustained
+  per-model power draw against the cooler's real ceiling — see the thermal section above), but
+  that's confirmed from one instrumented reproduction, not a sweep across models/loads; treat the
+  ~7W/~12W bracket as a single data point, not a calibrated threshold. Two items that reproduction
+  left open: whether the flat 3000MHz clock reading during the firmware's soft-temperature
+  throttle reflects real reaction-time lag or a stale `scaling_cur_freq` read (next test: sample
+  `vcgencmd measure_clock arm` directly), and making the Pi's journal persistent
+  (`sudo mkdir -p /var/log/journal && sudo systemd-tmpfiles --create --prefix /var/log/journal`)
+  before any future crash-hunting, so `journalctl` isn't blind to the reset the way it was here. An
+  application-level watchdog/auto-restart design is still the standing plan for any real product on
+  this hardware; the existing watchdog's kill mechanism still needs per-workload timing tuning (too
+  aggressive, and it kills normal cases — see the Pi vision suite above).
 - The Costa-receipt non-termination anomaly on the Pi vision suite (one ~18.86-minute non-
   terminating run vs. two clean 1-2 minute completions at the identical config) is unreconciled —
   see the Pi vision section above.
