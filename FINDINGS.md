@@ -279,8 +279,9 @@ measured power draw, not a cooling upgrade meant to eliminate the risk generical
 inside a haystack of unrelated filler sentences, asks `qwen3.5:9b` to recall it, and sweeps both
 haystack length and needle depth. Scoring is a deterministic substring match, not an LLM judge —
 this project already has one confirmed false-negative judge grade (see the fourth bug above), and
-exact-string recall doesn't need a second model's opinion. Results are in `needle_results.csv`
-(two full runs, 45 cells total).
+exact-string recall doesn't need a second model's opinion. Results are in `needle_results.csv`:
+42 rows across two runs — a first pass of four sizes (1,024–8,192) at three depths, then a full sweep
+of six sizes (1,024–32,768) at five depths — covering 30 unique size/depth cells.
 
 **Recall itself never degraded:** the needle was found in every single cell tested — every
 context size from 1,024 to 32,768 tokens, at every depth fraction from 0% to 100%, across both
@@ -294,6 +295,7 @@ below, and it doesn't require a hybrid-reasoning model to show up:
 | Context (tokens) | Prefill speed | Generation speed | TTFT |
 |---|---|---|---|
 | 1,024 | ~655 tok/s | ~61-62 tok/s | ~3.7-3.9s |
+| 2,048 | ~654-658 tok/s | ~61-62 tok/s | ~5.1-5.2s |
 | 4,096 | ~625-630 tok/s | ~60 tok/s | ~8.4-8.6s |
 | 8,192 | ~400-470 tok/s | ~33-40 tok/s | ~18.6-23.4s |
 | 16,384 | ~276-277 tok/s | ~17.1-17.9 tok/s | ~57.7-62.0s |
