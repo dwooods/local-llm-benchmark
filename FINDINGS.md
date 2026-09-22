@@ -268,10 +268,12 @@ accurate to call this purely probabilistic, but per-model power draw isn't publi
 has to be measured per model before trusting a multi-hour unattended run. A kill-and-cool thermal
 watchdog is a real, working mitigation for triggering an early shutdown before the crash zone — but
 its kill window needs to be tuned per workload; too short, and it kills a normal case before it can
-finish (see the Pi vision suite above), which is its own kind of lost data. A more aggressive or
-replacement physical cooler was considered and declined as a fix — the standing plan for any real
-product on this hardware is an application-level watchdog/auto-restart designed around per-model
-measured power draw, not a cooling upgrade meant to eliminate the risk generically.
+finish (see the Pi vision suite above), which is its own kind of lost data. A more aggressive
+third-party cooler was suggested and declined — a budget call for a hobby project, not a technical
+one; the instrumented data above suggests it would likely have been the right lever for
+`qwen3-vl:2b`'s sustained ~12W. The standing plan for any real product on this hardware is still an
+application-level watchdog/auto-restart designed around per-model measured power draw, with the
+cooler sized to that measured draw rather than assumed sufficient.
 
 ## Long-context degradation (needle-in-a-haystack)
 
