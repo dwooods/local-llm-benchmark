@@ -43,6 +43,18 @@ Two AMD/Vulkan-specific settings were tested as VRAM-saving levers and made thin
 `qwen2.5:3b`'s eval rate from ~150 tok/s to ~52 tok/s. Both are likely far more mature on
 NVIDIA/CUDA than on AMD's Vulkan backend here — don't set either on an AMD card without retesting.
 
+**Which backend, and which env var actually fixed the CPU fallback:** the captured Ollama server
+log from this machine shows both GPUs enumerated under Vulkan, not ROCm/HIP —
+`library=Vulkan ... name=Vulkan0 description="AMD Radeon RX 6700 XT" ... available="11.2 GiB"`
+(the Intel iGPU shows up as `Vulkan1` and is dropped as integrated). That means
+`HSA_OVERRIDE_GFX_VERSION`, a ROCm/HSA runtime variable, has no defined effect on this backend and
+the original explanation for why it "fixed" GPU detection (from the Gemini session that predates
+this project) was wrong. The three env vars in `README.md` were set together with a restart and
+verified only by the before/after tok/s jump; there is no "before" server log and no per-variable
+isolation. Best hypothesis, not confirmed: `OLLAMA_NUM_PARALLEL=1`, since Ollama's scheduler makes
+GPU/CPU placement decisions from predicted memory need and fewer parallel slots shrink that
+prediction. `OLLAMA_ORIGINS` is CORS-only and cannot be it. Listed under open items.
+
 The CPU baseline above was measured by disabling GPU acceleration at the env-var level, not by
 using Ollama's own `num_gpu: 0` request parameter, which forces genuine full-CPU inference without
 touching any environment variables — see open items below; a confirmatory run with `num_gpu: 0` on
@@ -429,9 +441,12 @@ against this project's own measured local numbers):
 - The llama.cpp-vs-Ollama speed comparison on the Pi was never run, despite a native ARM64
   llama.cpp build (via a from-source Jan Desktop build) being completed during this project — see
   `README.md`'s Pi setup section for what that build took.
-- Ollama version drift: the Pi is on v0.34.1, the PC on v0.33.2 — not confirmed to matter yet, but
-  worth reconciling before trusting any cross-machine comparison that assumes identical runtime
-  behavior.
+- Ollama version: the PC was updated from v0.33.2 to v0.34.1 partway through the project; the Pi
+  has been on v0.34.1 throughout. Most PC numbers are on v0.34.1, but which specific early PC runs
+  predate the update isn't logged, and none were re-run after it — not confirmed to matter.
+- Which of the three PC GPU env vars (or the restart) actually fixed the silent CPU fallback is not
+  isolated — see the VRAM-cliff section above. A clean test is: unset all three, confirm CPU
+  fallback in the server log, then set them one at a time with a restart between each.
 - Pi thermal reliability under sustained load: the root mechanism is now identified (sustained
   per-model power draw against the cooler's real ceiling — see the thermal section above), but
   that's confirmed from one instrumented reproduction, not a sweep across models/loads; treat the
