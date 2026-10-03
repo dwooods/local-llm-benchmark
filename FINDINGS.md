@@ -147,6 +147,12 @@ a watchdog for a long-running suite — the Pi's thermal risk below is exactly t
 calls for one — track and kill by pattern-matching the invocation (`pgrep -f`/`pkill -f` on a
 distinguishing config filename) instead of trusting a single captured PID.
 
+**An eighth, from the same watchdog:** don't judge a kill-and-resume cycle by its exit code. The
+first version of the Pi thermal watchdog decided success or failure from the exit code, so a clean
+kill → cool → resume cycle (the watchdog doing exactly its job) was logged as a failure. The fix
+was to track success with an internal flag the script sets itself, rather than trusting the exit
+code of a run it deliberately killed.
+
 ## Vision/OCR suite — PC: `glm-ocr` vs. `qwen3-vl:8b`
 
 This suite deliberately uses a deterministic `javascript` assertion instead of an LLM judge —
